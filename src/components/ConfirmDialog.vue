@@ -7,12 +7,16 @@ const props = withDefaults(defineProps<{
   title: string
   message: string
   confirmLabel?: string
+  cancelLabel?: string
+  busyLabel?: string
   inputLabel?: string
   inputPlaceholder?: string
   requireInput?: boolean
   busy?: boolean
 }>(), {
   confirmLabel: 'Confirm',
+  cancelLabel: 'Keep it',
+  busyLabel: 'Cancelling…',
   inputLabel: '',
   inputPlaceholder: '',
   requireInput: false,
@@ -72,10 +76,10 @@ function confirm() {
         <small v-if="requireInput" class="confirm-dialog-hint">A reason is required before this appointment can be cancelled.</small>
       </label>
       <div class="confirm-dialog-actions">
-        <button class="button button-quiet" type="button" :disabled="busy" @click="emit('cancel')">Keep it</button>
+        <button class="button button-quiet" type="button" :disabled="busy" @click="emit('cancel')">{{ cancelLabel }}</button>
         <button class="button button-danger" type="button" :disabled="busy || (requireInput && !input.trim())" @click="confirm">
           <span v-if="busy" class="button-spinner" aria-hidden="true"></span>
-          {{ busy ? 'Cancelling…' : confirmLabel }}
+          {{ busy ? busyLabel : confirmLabel }}
         </button>
       </div>
     </section>

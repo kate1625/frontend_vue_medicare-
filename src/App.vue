@@ -6,6 +6,7 @@ import { getProfilePicture } from './services/profilePreferences'
 import { setTheme } from './services/theme'
 import { sitemap } from './router'
 import UiIcon, { type IconName } from './components/UiIcon.vue'
+import ConfirmDialog from './components/ConfirmDialog.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -25,6 +26,7 @@ const navFilter = ref('')
 const searchText = ref('')
 const mobileOpen = ref(false)
 const signingOut = ref(false)
+const showLogoutConfirmation = ref(false)
 const isOnline = ref(navigator.onLine)
 const unreadMessageCount = ref(0)
 const unreadNotificationCount = ref(0)
@@ -283,8 +285,13 @@ watch(() => route.fullPath, () => {
   void refreshUnreadCounts()
 })
 
-async function signOut() {
+function signOut() {
+  if (!signingOut.value) showLogoutConfirmation.value = true
+}
+
+async function confirmSignOut() {
   if (signingOut.value) return
+  showLogoutConfirmation.value = false
   signingOut.value = true
   try { await endSession() } catch { /* Session is cleared even when the API is offline. */ }
   window.location.assign('/login')
@@ -377,4 +384,15 @@ async function signOut() {
       <div class="logout-dialog"><span class="logout-spinner" aria-hidden="true"></span><strong>Logging out</strong><p>Securely ending your MediCare+ session…</p></div>
     </div>
   </Transition>
+  <ConfirmDialog
+    :open="showLogoutConfirmation"
+    title="Log out of MediCare+?"
+    message="Are you sure you want to log out of your account?"
+    cancel-label="Stay signed in"
+    confirm-label="Log out"
+    busy-label="Logging out…"
+    :busy="signingOut"
+    @cancel="showLogoutConfirmation = false"
+    @confirm="confirmSignOut"
+  />
 </template>
