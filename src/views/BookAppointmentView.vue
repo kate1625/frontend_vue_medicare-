@@ -5,6 +5,9 @@ import { Calendar, type EventInput } from '@fullcalendar/core'
 import dayGridPlugin from '@fullcalendar/daygrid'
 import interactionPlugin from '@fullcalendar/interaction'
 import { ApiError, apiRequest, getApiData } from '../services/api'
+import UiIcon from '../components/UiIcon.vue'
+import SkeletonLoader from '../components/SkeletonLoader.vue'
+import { notify } from '../services/toast'
 
 interface Overview { services: Array<{service_id:number;service_name:string;price:number|string;duration_min:number}>; dentists: Array<{dentist_id:number;display_name:string;specialization:string|null}> }
 interface TimeSlot { time: string; status: 'available' | 'booked' | 'past' }
@@ -19,13 +22,18 @@ const selectedTime = ref('')
 const timePickerOpen = ref(false)
 const availability = ref<Availability | null>(null)
 const loading = ref(true)
+const isVerified = ref<boolean | null>(null)
+const verificationError = ref('')
 const checking = ref(false)
+const calendarLoading = ref(false)
+const calendarError = ref('')
 const saving = ref(false)
 const error = ref('')
 const success = ref('')
 const calendarElement = ref<HTMLDivElement | null>(null)
 let calendar: Calendar | null = null
 let availabilityRequest = 0
+let calendarRequestCount = 0
 const availableDateCounts = ref<Record<string, number>>({})
 const activeService = computed(() => overview.value?.services.find((service) => String(service.service_id) === serviceId.value))
 const timeSlots = computed<TimeSlot[]>(() => availability.value?.time_slots ?? availability.value?.slots.map((time) => ({ time, status: 'available' })) ?? [])
@@ -74,21 +82,41 @@ function initializeCalendar() {
     headerToolbar: { left: 'prev,next', center: 'title', right: 'today' },
     events: async (info, successCallback, failureCallback) => {
       if (!serviceId.value || !dentistId.value) { successCallback([]); return }
+      calendarRequestCount += 1
+      calendarLoading.value = true
+      calendarError.value = ''
       const params = new URLSearchParams({ dentist_id: dentistId.value, service_id: serviceId.value, start: info.startStr.slice(0, 10), end: info.endStr.slice(0, 10) })
       try {
         const events = await getApiData<EventInput[]>(`/api/appointments/calendar?${params.toString()}`)
-        availableDateCounts.value = events.reduce<Record<string, number>>((counts, event) => {
+        const availableCounts = events.reduce<Record<string, number>>((counts, event) => {
           const eventDate = String(event.extendedProps?.appt_date ?? event.start ?? '').slice(0, 10)
-          if (eventDate && event.extendedProps?.slot_status === 'available') counts[eventDate] = (counts[eventDate] ?? 0) + 1
+          if (eventDate && event.extendedProps?.slot_status === 'available') {
+            counts[eventDate] = (counts[eventDate] ?? 0) + 1
+          }
           return counts
         }, {})
+        const summaryCounts = events.reduce<Record<string, number>>((counts, event) => {
+          const eventDate = String(event.extendedProps?.appt_date ?? event.start ?? '').slice(0, 10)
+          if (eventDate && event.extendedProps?.slot_status === 'summary') {
+            counts[eventDate] = Number(event.extendedProps.available_count ?? 0)
+          }
+          return counts
+        }, {})
+        availableDateCounts.value = { ...availableCounts, ...summaryCounts }
         successCallback(events.filter((event) => event.extendedProps?.slot_status === 'available').map((event) => ({
           ...event,
           display: 'background',
         })))
         window.setTimeout(renderAvailabilityMarkers, 0)
       }
-      catch (cause) { failureCallback(cause instanceof Error ? cause : new Error('Could not load open time slots.')) }
+      catch (cause) {
+        const requestError = cause instanceof Error ? cause : new Error('Could not load open time slots.')
+        calendarError.value = requestError.message
+        failureCallback(requestError)
+      } finally {
+        calendarRequestCount = Math.max(0, calendarRequestCount - 1)
+        calendarLoading.value = calendarRequestCount > 0
+      }
     },
     dateClick: (info) => selectDate(info.dateStr.slice(0, 10)),
     eventDidMount: (info) => {
@@ -118,16 +146,22 @@ function renderAvailabilityMarkers() {
   calendarElement.value?.querySelectorAll<HTMLElement>('.fc-daygrid-day').forEach((cell) => {
     cell.querySelector('.availability-marker')?.remove()
     const count = availableDateCounts.value[cell.dataset.date ?? '']
-    if (!count) return
+    if (count === undefined) return
     const marker = document.createElement('span')
     marker.className = 'availability-marker'
-    marker.textContent = `${count} available`
-    cell.querySelector('.fc-daygrid-day-top')?.append(marker)
+    marker.textContent = String(count)
+    marker.setAttribute('aria-label', `${count} available time slots`)
+    marker.setAttribute('title', `${count} available time slots`)
+    cell.querySelector('.fc-daygrid-day-frame')?.append(marker)
   })
 }
 
 async function submitBooking() {
   if (saving.value) return
+  if (isVerified.value !== true) {
+    error.value = 'Verify your email address in Profile & Settings before booking an appointment.'
+    return
+  }
   if (!selectedTime.value || !serviceId.value || !dentistId.value || !date.value) return
   saving.value = true
   error.value = ''
@@ -138,9 +172,31 @@ async function submitBooking() {
       body: JSON.stringify({ service_id: Number(serviceId.value), dentist_id: Number(dentistId.value), appt_date: date.value, appt_time: selectedTime.value }),
     })
     success.value = 'Appointment request submitted.'
+    notify.success(success.value, 'Appointment requested')
     await router.push({ path: '/patient/payment', query: { appointment_id: String(result.data.appointment_id) } })
-  } catch (cause) { error.value = cause instanceof ApiError ? cause.message : 'Could not submit the appointment request.' }
+  } catch (cause) {
+    error.value = cause instanceof ApiError ? cause.message : 'Could not submit the appointment request.'
+    notify.error(error.value, 'Appointment request failed')
+    if (cause instanceof ApiError && cause.status === 409) {
+      selectedTime.value = ''
+      await loadAvailability()
+      calendar?.refetchEvents()
+      if (error.value) error.value += ' Please choose another time.'
+      else error.value = 'That time was just booked. Available times have been refreshed; please choose another.'
+    }
+  }
   finally { saving.value = false }
+}
+
+async function loadVerificationStatus() {
+  isVerified.value = null
+  verificationError.value = ''
+  try {
+    const account = await getApiData<{ is_verified: boolean }>('/api/auth/account')
+    isVerified.value = account.is_verified
+  } catch (cause) {
+    verificationError.value = cause instanceof ApiError ? cause.message : 'Could not check your account verification status.'
+  }
 }
 
 watch([date, serviceId, dentistId], loadAvailability)
@@ -148,16 +204,43 @@ watch([serviceId, dentistId], () => {
   availableDateCounts.value = {}
   calendar?.refetchEvents()
 })
-onMounted(async () => { await loadOverview(); await nextTick(); initializeCalendar() })
+onMounted(async () => {
+  await loadVerificationStatus()
+  await loadOverview()
+  await nextTick()
+  if (isVerified.value === true) initializeCalendar()
+})
 onBeforeUnmount(() => { calendar?.destroy(); calendar = null })
 </script>
 
 <template>
-  <section class="page-heading"><div><p class="eyebrow">PAGE 07 · PATIENT</p><h1>Book an appointment</h1><p class="muted">Choose a service, dentist, and an available time from the clinic schedule.</p></div></section>
+  <section class="page-heading"><div><p class="eyebrow"></p><h1>Book an appointment</h1><p class="muted">Choose a service, dentist, and an available time from the clinic schedule.</p></div></section>
   <div v-if="error" class="alert alert-error" role="alert">{{ error }} <button v-if="!overview" class="text-button" type="button" @click="loadOverview">Retry</button></div>
-  <div v-if="success" class="alert alert-success" role="status">{{ success }}</div>
-  <section class="surface booking-card">
-    <div v-if="loading" class="empty-state">Loading clinic services…</div>
+  <section class="surface booking-card" :class="{ 'booking-card-verification': !loading && isVerified === false }">
+    <SkeletonLoader v-if="loading" variant="booking" :contained="true" label="Loading clinic services and availability" />
+    <div v-else-if="isVerified === false" class="booking-verification-gate" role="status">
+      <div class="booking-verification-main">
+        <span class="booking-verification-icon"><UiIcon name="mail" /></span>
+        <p class="booking-verification-eyebrow">ONE QUICK STEP BEFORE BOOKING</p>
+        <h2>Verify your account</h2>
+        <p class="booking-verification-description">Confirm your email address so we can protect your account and keep you updated about your appointments.</p>
+        <RouterLink class="button button-primary" to="/settings/profile"><UiIcon name="shield-check" /> Go to account verification</RouterLink>
+      </div>
+      <aside class="booking-verification-guide" aria-label="Verification steps">
+        <strong>It only takes a moment</strong>
+        <ol>
+          <li><span>1</span><div><b>Open Profile &amp; Settings</b><small>Your account verification is there.</small></div></li>
+          <li><span>2</span><div><b>Get your email code</b><small>Check your inbox or spam folder.</small></div></li>
+          <li><span>3</span><div><b>Enter the code</b><small>Then come back to book your visit.</small></div></li>
+        </ol>
+        <p><UiIcon name="shield-check" /> Your account details stay protected.</p>
+      </aside>
+    </div>
+    <div v-else-if="isVerified === null" class="empty-state">
+      <strong>{{ verificationError ? 'Could not confirm your account status' : 'Checking your account verification…' }}</strong>
+      <p v-if="verificationError">{{ verificationError }}</p>
+      <button v-if="verificationError" class="button button-quiet" type="button" @click="loadVerificationStatus">Try again</button>
+    </div>
     <div v-else-if="!overview?.services.length || !overview.dentists.length" class="empty-state"><strong>Booking is unavailable</strong><p>The clinic needs active services and dentist schedules before patients can book.</p></div>
     <form v-else class="booking-form" @submit.prevent="submitBooking">
       <div class="booking-details">
@@ -169,7 +252,7 @@ onBeforeUnmount(() => { calendar?.destroy(); calendar = null })
           <label class="field"><span>Service <i>*</i></span><select v-model="serviceId" required><option v-for="service in overview.services" :key="service.service_id" :value="String(service.service_id)">{{ service.service_name }}</option></select></label>
           <label class="field"><span>Dentist <i>*</i></span><select v-model="dentistId" required><option v-for="dentist in overview.dentists" :key="dentist.dentist_id" :value="String(dentist.dentist_id)">{{ dentist.display_name }}{{ dentist.specialization ? ` · ${dentist.specialization}` : '' }}</option></select></label>
           <label class="field"><span>Date <i>*</i></span><input v-model="date" type="date" :min="minDate" required /></label>
-          <label class="field"><span>Available time <i>*</i></span><button class="time-picker-trigger" type="button" :disabled="checking || !availableTimes.length" @click="timePickerOpen = true"><span>{{ checking ? 'Checking availability…' : selectedTime || 'Choose a time' }}</span><span class="time-picker-chevron">⌄</span></button></label>
+          <label class="field"><span>Available time <i>*</i></span><button class="time-picker-trigger" type="button" :disabled="checking || !availableTimes.length" :aria-busy="checking" @click="timePickerOpen = true"><span class="time-picker-trigger-value"><span v-if="checking" class="time-picker-spinner" aria-hidden="true"></span>{{ checking ? 'Checking availability…' : selectedTime || 'Choose a time' }}</span><span class="time-picker-chevron">⌄</span></button><small v-if="checking" class="availability-checking-note" role="status" aria-live="polite">Checking available times for your selected date…</small></label>
         </div>
         <div class="booking-summary" v-if="activeService"><span class="booking-summary-label">VISIT SUMMARY</span><strong>{{ activeService.service_name }}</strong><span class="booking-summary-price">{{ Number(activeService.price).toLocaleString('en-PH', { style: 'currency', currency: 'PHP' }) }}</span><small>{{ activeService.duration_min }} minute visit</small></div>
         <div v-if="date && !checking && availability && !availability.slots.length" class="alert alert-error">No appointment times are available on this date. Choose another date or dentist.</div>
@@ -180,8 +263,16 @@ onBeforeUnmount(() => { calendar?.destroy(); calendar = null })
           <span class="booking-step">02</span>
           <div><h2>Choose a date and time</h2><p>Select a date, then choose an available time below.</p></div>
         </header>
+        <div v-if="calendarLoading" class="calendar-availability-loading" role="status" aria-live="polite">
+          <span class="time-picker-spinner" aria-hidden="true"></span>
+          <span>Loading available times for this calendar…</span>
+        </div>
+        <div v-if="calendarError" class="alert alert-error calendar-availability-error" role="alert">
+          <span>Could not load calendar availability: {{ calendarError }}</span>
+          <button class="text-button" type="button" @click="calendar?.refetchEvents()">Retry</button>
+        </div>
         <div ref="calendarElement"></div>
-        <p class="form-note">Available slots are based on the dentist’s schedule.</p>
+        <p class="form-note">Available slots are 40 minutes apart. Lunch break: 12:00–1:00 PM.</p>
       </div>
     </form>
   </section>
@@ -201,6 +292,7 @@ onBeforeUnmount(() => { calendar?.destroy(); calendar = null })
       </div>
       <div v-else-if="timeSlots.length" class="time-picker-results">
         <div class="time-picker-summary"><p class="time-picker-subtitle">{{ availableTimes.length }} available times</p><div class="time-picker-guide" aria-label="Time status guide"><span><i class="time-status-dot time-status-available"></i>Available</span><span><i class="time-status-dot time-status-booked"></i>Already booked</span><span><i class="time-status-dot time-status-past"></i>Passed time</span></div></div>
+        <p class="time-picker-hours-note">Slots are 40 minutes apart. Lunch break: 12:00–1:00 PM.</p>
         <div class="time-chip-list">
           <button v-for="slot in timeSlots" :key="`${slot.time}-${slot.status}`" class="time-chip" :class="[`time-chip-${slot.status}`, { 'is-selected': selectedTime === slot.time }]" type="button" :disabled="slot.status !== 'available'" :title="slot.status === 'booked' ? 'Already booked' : slot.status === 'past' ? 'Passed time' : 'Available'" @click="selectTime(slot.time)">{{ slot.time }}</button>
         </div>

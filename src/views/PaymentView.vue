@@ -1,7 +1,9 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { ApiError, apiRequest, getApiData } from '../services/api'
 import { useRoute } from 'vue-router'
+import SkeletonLoader from '../components/SkeletonLoader.vue'
+import { notify } from '../services/toast'
 
 async function loadQr() {
   const mod = await import('qrcode')
@@ -28,6 +30,7 @@ let paymentRefreshTimer: number | null = null
 let paymentRefreshInFlight = false
 const form = reactive({ appointment_id: '', payment_method_id: '', payment_plan: 'full' as 'full'|'downpayment', payment_percent: 50, reference_no: '' })
 const selectedMethod = computed(() => methods.value.find((item) => item.payment_method_id === Number(form.payment_method_id)))
+const paymentCardElement = ref<HTMLElement | null>(null)
 const payableAppointments = computed(() => appointments.value.filter((item) => !['cancelled', 'no_show'].includes(item.status) && Number(charges.value.find((charge) => charge.appointment_id === item.appointment_id)?.balance_due ?? item.price) > 0 && !payments.value.some((payment) => payment.appointment_id === item.appointment_id && payment.status === 'pending')))
 const selectedAppointment = computed(() => payableAppointments.value.find((item) => item.appointment_id === Number(form.appointment_id)))
 const selectedCharge = computed(() => charges.value.find((item) => item.appointment_id === Number(form.appointment_id)))
@@ -35,6 +38,19 @@ const amountDue = computed(() => Number(selectedCharge.value?.balance_due ?? sel
 const paymentAmount = computed(() => form.payment_plan === 'downpayment' ? Math.min(amountDue.value, Number(selectedAppointment.value?.price ?? 0) * form.payment_percent / 100) : amountDue.value)
 const selectedOnlineMethod = computed(() => selectedMethod.value && ['ewallet', 'card'].includes(selectedMethod.value.type))
 const selectedMethodAvailable = computed(() => selectedMethod.value && Number(selectedMethod.value.is_maintenance) !== 1)
+function canPayCharge(charge: Charge) {
+  return Number(charge.balance_due) > 0 && payableAppointments.value.some((item) => item.appointment_id === charge.appointment_id)
+}
+async function payCharge(charge: Charge) {
+  if (!canPayCharge(charge)) return
+  form.appointment_id = String(charge.appointment_id)
+  form.payment_method_id = ''
+  form.payment_plan = 'full'
+  error.value = ''
+  message.value = ''
+  await nextTick()
+  paymentCardElement.value?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+}
 async function refresh(showLoading = true) {
   if (paymentRefreshInFlight) return
   paymentRefreshInFlight = true
@@ -69,8 +85,8 @@ watch(selectedMethod, async (method) => {
 })
 async function submit() {
   saving.value = true; error.value = ''; message.value = ''
-  try { const result = await apiRequest<{ data: { payment_id: number }; message: string }>('/api/payments', { method: 'POST', body: JSON.stringify({ ...form, appointment_id: Number(form.appointment_id), payment_method_id: Number(form.payment_method_id) }) }); receiptPaymentId.value = result.data.payment_id; message.value = 'Payment submitted successfully. Your receipt is ready while the clinic verifies the payment.'; form.reference_no = ''; await refresh() }
-  catch (cause) { error.value = cause instanceof ApiError ? cause.message : 'Payment could not be submitted.' }
+  try { const result = await apiRequest<{ data: { payment_id: number }; message: string }>('/api/payments', { method: 'POST', body: JSON.stringify({ ...form, appointment_id: Number(form.appointment_id), payment_method_id: Number(form.payment_method_id) }) }); receiptPaymentId.value = result.data.payment_id; message.value = 'Payment submitted successfully. Your receipt is ready while the clinic verifies the payment.'; notify.success(message.value, 'Payment submitted'); form.reference_no = ''; await refresh() }
+  catch (cause) { error.value = cause instanceof ApiError ? cause.message : 'Payment could not be submitted.'; notify.error(error.value, 'Payment not submitted') }
   finally { saving.value = false }
 }
 async function startPayMongoCheckout() {
@@ -88,6 +104,7 @@ async function startPayMongoCheckout() {
     error.value = cause instanceof ApiError
       ? cause.message
       : 'Online checkout is temporarily unavailable. Please use “Submit for clinic review” instead.'
+    notify.error(error.value, 'Online checkout unavailable')
     saving.value = false
   }
 }
@@ -102,6 +119,7 @@ async function checkPayMongoReturn() {
       body: JSON.stringify({ payment_id: paymentId, verify: false }),
     })
     message.value = result.message
+    notify.success(result.message, 'Payment update')
     receiptPaymentId.value = paymentId
     if (result.data.status !== 'pending') {
       paymongoCheckoutUrl.value = ''
@@ -110,6 +128,7 @@ async function checkPayMongoReturn() {
     await refresh()
   } catch (cause) {
     error.value = cause instanceof ApiError ? cause.message : 'Could not verify the PayMongo payment.'
+    notify.error(error.value, 'Payment verification failed')
   } finally {
     saving.value = false
   }
@@ -127,23 +146,23 @@ onBeforeUnmount(() => { if (paymentRefreshTimer) window.clearInterval(paymentRef
   <div class="payment-workspace">
     <header class="payment-heading">
       <div>
-        <p class="payment-eyebrow">PATIENT PORTAL <span>/</span> BILLING</p>
+        <p class="payment-eyebrow"> <span></span> </p>
         <h1>Payments</h1>
         <p>Review appointment charges and manage your clinic payments.</p>
       </div>
-      <div class="payment-clinic-note"><span class="payment-clinic-dot"></span> Clinic billing</div>
+
     </header>
 
     <p v-if="message" class="payment-alert payment-alert-success" role="status">{{ message }} <RouterLink v-if="receiptPaymentId" :to="{ path: '/patient/receipt', query: { id: receiptPaymentId } }">View receipt</RouterLink><RouterLink v-else to="/patient/receipt">View receipts</RouterLink></p>
     <p v-if="message && paymongoCheckoutUrl" class="payment-alert payment-alert-info"><a :href="paymongoCheckoutUrl" target="_blank" rel="noopener">Continue to PayMongo checkout</a></p>
 
-    <section v-if="loading" class="surface payment-state"><span class="loading-dot"/><strong>Loading payment options</strong></section>
+    <SkeletonLoader v-if="loading" variant="payment" label="Loading payment options and billing details" />
     <section v-else-if="error && !methods.length" class="surface payment-state">
-      <strong>Payment options unavailable</strong><p>{{ error }}</p><button class="button button-quiet" @click="refresh">Retry</button>
+      <strong>Payment options unavailable</strong><p>{{ error }}</p><button>class="button button-quiet" @click="refresh">Retry</button>
     </section>
     <template v-else>
       <div class="payment-layout">
-        <section class="surface payment-card">
+        <section ref="paymentCardElement" class="surface payment-card">
           <div class="payment-card-heading">
             <div><p class="payment-step">PAYMENT DETAILS</p><h2>Choose how to pay</h2></div>
             <span class="payment-card-caption">Appointment payment</span>
@@ -236,12 +255,12 @@ onBeforeUnmount(() => { if (paymentRefreshTimer) window.clearInterval(paymentRef
 
       <section v-if="charges.length" class="surface payment-section">
         <div class="payment-section-heading"><div><p class="payment-step">BILLING OVERVIEW</p><h2>Appointment charges</h2><p>Charges and balances based on verified payments.</p></div></div>
-        <div class="table-wrap"><table class="data-table"><thead><tr><th>Appointment</th><th>Charge</th><th>Verified</th><th>Balance</th><th>Status</th></tr></thead><tbody><tr v-for="charge in charges" :key="charge.appointment_id"><td>#{{charge.appointment_id}} · {{charge.service_name}}<small class="table-secondary">{{charge.appt_date}} · {{charge.appt_time}}</small></td><td>{{Number(charge.amount_due).toLocaleString('en-PH',{style:'currency',currency:'PHP'})}}</td><td>{{Number(charge.amount_paid).toLocaleString('en-PH',{style:'currency',currency:'PHP'})}}</td><td><strong>{{Number(charge.balance_due).toLocaleString('en-PH',{style:'currency',currency:'PHP'})}}</strong></td><td><span class="status-badge" :data-status="charge.latest_payment_status||'unpaid'">{{Number(charge.balance_due)===0?'paid':charge.latest_payment_status==='pending'?'pending verification':charge.latest_payment_status==='rejected'?'payment rejected':'unpaid'}}</span></td></tr></tbody></table></div>
+        <div class="table-wrap"><table class="data-table"><thead><tr><th>Appointment</th><th>Charge</th><th>Verified</th><th>Balance</th><th>Status</th><th>Action</th></tr></thead><tbody><tr v-for="charge in charges" :key="charge.appointment_id"><td>#{{charge.appointment_id}} · {{charge.service_name}}<small class="table-secondary">{{charge.appt_date}} · {{charge.appt_time}}</small></td><td>{{Number(charge.amount_due).toLocaleString('en-PH',{style:'currency',currency:'PHP'})}}</td><td>{{Number(charge.amount_paid).toLocaleString('en-PH',{style:'currency',currency:'PHP'})}}</td><td><strong>{{Number(charge.balance_due).toLocaleString('en-PH',{style:'currency',currency:'PHP'})}}</strong></td><td><span class="status-badge" :data-status="charge.latest_payment_status||'unpaid'">{{Number(charge.balance_due)===0?'paid':charge.latest_payment_status==='pending'?'pending verification':charge.latest_payment_status==='rejected'?'payment rejected':'unpaid'}}</span></td><td><button v-if="canPayCharge(charge)" class="button button-quiet payment-balance-action" type="button" @click="payCharge(charge)">Pay balance</button><span v-else-if="Number(charge.balance_due) > 0 && charge.latest_payment_status === 'pending'" class="payment-review-note">Awaiting review</span><span v-else>—</span></td></tr></tbody></table></div>
       </section>
 
       <section v-if="payments.length" class="surface payment-section">
         <div class="payment-section-heading"><div><p class="payment-step">RECENT ACTIVITY</p><h2>Payment history</h2></div><RouterLink class="payment-receipts-link" to="/patient/receipt">View all receipts</RouterLink></div>
-        <div class="appointment-list"><article v-for="item in payments" :key="item.payment_id" class="appointment-card"><div><strong>Payment #{{ item.payment_id }}</strong><p>Appointment #{{ item.appointment_id }}</p></div><span class="status-badge" :data-status="item.status">{{ item.status }}</span><RouterLink :to="{ path: '/patient/receipt', query: { id: item.payment_id } }">Receipt</RouterLink></article></div>
+        <div class="payment-history-list"><article v-for="item in payments" :key="item.payment_id" class="payment-history-item"><div class="payment-history-details"><strong>Payment #{{ item.payment_id }}</strong><p>Appointment #{{ item.appointment_id }}</p></div><span class="status-badge" :data-status="item.status">{{ item.status }}</span><RouterLink class="payment-history-receipt" :to="{ path: '/patient/receipt', query: { id: item.payment_id } }">View receipt <span aria-hidden="true">→</span></RouterLink></article></div>
       </section>
     </template>
   </div>
@@ -351,6 +370,26 @@ onBeforeUnmount(() => { if (paymentRefreshTimer) window.clearInterval(paymentRef
   min-width: 0;
   border-radius: 16px;
   padding: clamp(20px, 2.4vw, 30px);
+}
+
+.payment-card {
+  scroll-margin-top: 84px;
+}
+
+.payment-balance-action {
+  min-height: 34px;
+  padding: 6px 11px;
+  color: #28775b;
+  font-size: 11px;
+  font-weight: 750;
+  white-space: nowrap;
+}
+
+.payment-review-note {
+  color: #8a6a2b;
+  font-size: 11px;
+  font-weight: 650;
+  white-space: nowrap;
 }
 
 .payment-card-heading,
@@ -666,6 +705,61 @@ onBeforeUnmount(() => { if (paymentRefreshTimer) window.clearInterval(paymentRef
   padding: 14px 0;
 }
 
+.payment-history-list {
+  display: grid;
+  gap: 10px;
+}
+
+.payment-history-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 18px;
+  min-width: 0;
+  padding: 15px 17px;
+  border: 1px solid #e2ebe7;
+  border-radius: 12px;
+  background: #fbfdfc;
+  transition: border-color .16s ease, background .16s ease;
+}
+
+.payment-history-item:hover {
+  border-color: #9dcbb1;
+  background: #f5faf6;
+}
+
+.payment-history-details {
+  min-width: 0;
+}
+
+.payment-history-details strong {
+  display: block;
+  color: #263f35;
+  font-size: 13px;
+  font-weight: 750;
+}
+
+.payment-history-details p {
+  margin: 4px 0 0;
+  color: #718278;
+  font-size: 11.5px;
+}
+
+.payment-history-receipt {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: #34745f;
+  font-size: 11.9px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.payment-history-receipt:hover {
+  color: #245c49;
+  text-decoration: underline;
+}
+
 .payment-state {
   display: grid;
   justify-items: start;
@@ -713,104 +807,193 @@ onBeforeUnmount(() => { if (paymentRefreshTimer) window.clearInterval(paymentRef
   color: #476b7e;
 }
 
-:global(:root[data-theme='dark']) .payment-heading h1,
-:global(:root[data-theme='dark']) .payment-card-heading h2,
-:global(:root[data-theme='dark']) .payment-section-heading h2,
-:global(:root[data-theme='dark']) .payment-guidance strong,
-:global(:root[data-theme='dark']) .payment-method-details-heading > strong,
-:global(:root[data-theme='dark']) .payment-method-details > p > strong,
-:global(:root[data-theme='dark']) .payment-empty strong {
+:global(.app-shell[data-theme='dark'] .payment-heading h1),
+:global(.app-shell[data-theme='dark'] .payment-card-heading h2),
+:global(.app-shell[data-theme='dark'] .payment-section-heading h2),
+:global(.app-shell[data-theme='dark'] .payment-guidance strong),
+:global(.app-shell[data-theme='dark'] .payment-method-details-heading > strong),
+:global(.app-shell[data-theme='dark'] .payment-method-details > p > strong),
+:global(.app-shell[data-theme='dark'] .payment-empty strong) {
   color: #e4ede9;
 }
 
-:global(:root[data-theme='dark']) .payment-heading > div:first-child > p:last-child,
-:global(:root[data-theme='dark']) .payment-guidance p,
-:global(:root[data-theme='dark']) .payment-field small,
-:global(:root[data-theme='dark']) .payment-section-heading > div > p:last-child,
-:global(:root[data-theme='dark']) .payment-state p,
-:global(:root[data-theme='dark']) .payment-empty p {
+:global(.app-shell[data-theme='dark'] .payment-heading > div:first-child > p:last-child),
+:global(.app-shell[data-theme='dark'] .payment-guidance p),
+:global(.app-shell[data-theme='dark'] .payment-field small),
+:global(.app-shell[data-theme='dark'] .payment-section-heading > div > p:last-child),
+:global(.app-shell[data-theme='dark'] .payment-state p),
+:global(.app-shell[data-theme='dark'] .payment-empty p) {
   color: #a3b3ae;
 }
 
-:global(:root[data-theme='dark']) .payment-clinic-note,
-:global(:root[data-theme='dark']) .payment-card-caption,
-:global(:root[data-theme='dark']) .payment-guidance,
-:global(:root[data-theme='dark']) .payment-visit,
-:global(:root[data-theme='dark']) .payment-summary {
+:global(.app-shell[data-theme='dark'] .payment-card),
+:global(.app-shell[data-theme='dark'] .payment-section),
+:global(.app-shell[data-theme='dark'] .payment-summary) {
+  border-color: #354741;
+  background: #1d2b26;
+  color: #d2dfd8;
+}
+
+:global(.app-shell[data-theme='dark'] .payment-clinic-note),
+:global(.app-shell[data-theme='dark'] .payment-card-caption),
+:global(.app-shell[data-theme='dark'] .payment-guidance),
+:global(.app-shell[data-theme='dark'] .payment-visit) {
   border-color: #354741;
   background: #263630;
 }
 
-:global(:root[data-theme='dark']) .payment-clinic-note,
-:global(:root[data-theme='dark']) .payment-field,
-:global(:root[data-theme='dark']) .payment-visit > strong,
-:global(:root[data-theme='dark']) .payment-summary-lines strong,
-:global(:root[data-theme='dark']) .payment-total {
+:global(.app-shell[data-theme='dark'] .payment-clinic-note),
+:global(.app-shell[data-theme='dark'] .payment-field),
+:global(.app-shell[data-theme='dark'] .payment-visit > strong),
+:global(.app-shell[data-theme='dark'] .payment-summary-lines strong),
+:global(.app-shell[data-theme='dark'] .payment-total) {
   color: #d2dfd8;
 }
 
-:global(:root[data-theme='dark']) .payment-guidance-icon {
+:global(.app-shell[data-theme='dark'] .payment-guidance-icon) {
   background: #344c40;
   color: #b9e2cd;
 }
 
-:global(:root[data-theme='dark']) .payment-method-details,
-:global(:root[data-theme='dark']) .payment-method-details .payment-method-note {
+:global(.app-shell[data-theme='dark'] .payment-method-details),
+:global(.app-shell[data-theme='dark'] .payment-method-details .payment-method-note) {
   border-color: #354741;
   background: #263630;
 }
 
-:global(:root[data-theme='dark']) .payment-method-details > p:not(.form-error),
-:global(:root[data-theme='dark']) .payment-visit > span:last-child,
-:global(:root[data-theme='dark']) .payment-summary-lines,
-:global(:root[data-theme='dark']) .payment-summary-footnote,
-:global(:root[data-theme='dark']) .payment-summary-empty {
+:global(.app-shell[data-theme='dark'] .payment-method-details > p:not(.form-error)),
+:global(.app-shell[data-theme='dark'] .payment-visit > span:last-child),
+:global(.app-shell[data-theme='dark'] .payment-summary-lines),
+:global(.app-shell[data-theme='dark'] .payment-summary-footnote),
+:global(.app-shell[data-theme='dark'] .payment-summary-empty) {
   color: #a3b3ae;
 }
 
-:global(:root[data-theme='dark']) .payment-summary-lines,
-:global(:root[data-theme='dark']) .payment-total,
-:global(:root[data-theme='dark']) .payment-summary-footnote {
+:global(.app-shell[data-theme='dark'] .payment-summary-lines),
+:global(.app-shell[data-theme='dark'] .payment-total),
+:global(.app-shell[data-theme='dark'] .payment-summary-footnote) {
   border-color: #354741;
 }
 
-:global(:root[data-theme='dark']) .payment-visit-label {
+:global(.app-shell[data-theme='dark'] .payment-visit-label) {
   color: #a3b3ae;
 }
 
-:global(:root[data-theme='dark']) .payment-summary-empty {
+:global(.app-shell[data-theme='dark'] .payment-summary-empty) {
   border-color: #40534b;
+  background: #202e2a;
+  color: #c1d0c9;
 }
 
-:global(:root[data-theme='dark']) .payment-alert-success {
+:global(.app-shell[data-theme='dark'] .payment-alert-success) {
   border-color: #3d5d49;
   background: #263a2f;
   color: #c5e7d6;
 }
 
-:global(:root[data-theme='dark']) .payment-alert-info {
+:global(.app-shell[data-theme='dark'] .payment-alert-info) {
   border-color: #3c5260;
   background: #26343b;
   color: #c4dce6;
 }
 
-:global(:root[data-theme='dark']) .payment-field select,
-:global(:root[data-theme='dark']) .payment-field input,
-:global(:root[data-theme='dark']) .payment-plan-options label,
-:global(:root[data-theme='dark']) .payment-method-details img {
+:global(.app-shell[data-theme='dark'] .payment-field select),
+:global(.app-shell[data-theme='dark'] .payment-field input),
+:global(.app-shell[data-theme='dark'] .payment-plan-options label),
+:global(.app-shell[data-theme='dark'] .payment-method-details img) {
   border-color: #496258;
   background: #202f29;
   color: #e0ece5;
 }
 
-:global(:root[data-theme='dark']) .payment-field,
-:global(:root[data-theme='dark']) .payment-field em,
-:global(:root[data-theme='dark']) .payment-method-details > p > strong {
+:global(.app-shell[data-theme='dark'] .payment-field),
+:global(.app-shell[data-theme='dark'] .payment-field em),
+:global(.app-shell[data-theme='dark'] .payment-method-details > p > strong) {
   color: #c9ded1;
 }
 
-:global(:root[data-theme='dark']) .payment-plan-options strong {
+:global(.app-shell[data-theme='dark'] .payment-plan-options strong) {
   color: #9ed5b5;
+}
+
+:global(.app-shell[data-theme='dark'] .payment-section .data-table th) {
+  border-color: #354741;
+  background: #263630;
+  color: #c1d0c9;
+}
+
+:global(.app-shell[data-theme='dark'] .payment-section .data-table td) {
+  border-color: #354741;
+  color: #d2dfd8;
+}
+
+:global(.app-shell[data-theme='dark'] .payment-balance-action) {
+  border-color: #4c795f;
+  background: #294b36;
+  color: #dff3e5;
+}
+
+:global(.app-shell[data-theme='dark'] .payment-balance-action:hover) {
+  border-color: #70a985;
+  background: #315940;
+}
+
+:global(.app-shell[data-theme='dark'] .payment-review-note) {
+  color: #f0d48b;
+}
+
+:global(.app-shell[data-theme='dark'] .payment-section .table-secondary) {
+  color: #a3b3ae;
+}
+
+:global(.app-shell[data-theme='dark'] .payment-section .status-badge[data-status='pending']),
+:global(.app-shell[data-theme='dark'] .payment-section .status-badge[data-status='pending verification']),
+:global(.app-shell[data-theme='dark'] .payment-section .status-badge[data-status='unpaid']) {
+  border-color: #806b3e;
+  background: #403821;
+  color: #f0d48b;
+}
+
+:global(.app-shell[data-theme='dark'] .payment-section .status-badge[data-status='verified']),
+:global(.app-shell[data-theme='dark'] .payment-section .status-badge[data-status='paid']) {
+  border-color: #426d55;
+  background: #244231;
+  color: #a4e2ba;
+}
+
+:global(.app-shell[data-theme='dark'] .payment-section .status-badge[data-status='rejected']),
+:global(.app-shell[data-theme='dark'] .payment-section .status-badge[data-status='payment rejected']) {
+  border-color: #754849;
+  background: #40272a;
+  color: #f0a6a6;
+}
+
+:global(.app-shell[data-theme='dark'] .payment-section .payment-receipts-link),
+:global(.app-shell[data-theme='dark'] .payment-section .appointment-card a) {
+  color: #9cdbb4;
+}
+
+:global(.app-shell[data-theme='dark'] .payment-history-item) {
+  border-color: #3a5047;
+  background: #202e28;
+}
+
+:global(.app-shell[data-theme='dark'] .payment-history-item:hover) {
+  border-color: #5d9c7d;
+  background: #26382e;
+}
+
+:global(.app-shell[data-theme='dark'] .payment-history-details strong) {
+  color: #e4ede9;
+}
+
+:global(.app-shell[data-theme='dark'] .payment-history-details p) {
+  color: #b2c2bb;
+}
+
+:global(.app-shell[data-theme='dark'] .payment-history-receipt),
+:global(.app-shell[data-theme='dark'] .payment-history-receipt:hover) {
+  color: #9cdbb4;
 }
 
 @media (max-width: 900px) {
@@ -821,6 +1004,21 @@ onBeforeUnmount(() => { if (paymentRefreshTimer) window.clearInterval(paymentRef
   .payment-summary {
     position: static;
     grid-row: 1;
+  }
+}
+
+@media (max-width: 520px) {
+  .payment-history-item {
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 10px 12px;
+  }
+
+  .payment-history-details {
+    grid-column: 1 / -1;
+  }
+
+  .payment-history-item .status-badge {
+    justify-self: start;
   }
 }
 

@@ -24,6 +24,8 @@ export type IconName =
   | 'log-out'
   | 'mail'
   | 'menu'
+  | 'panel-left-close'
+  | 'panel-left-open'
   | 'message-circle'
   | 'moon'
   | 'pill'
@@ -43,6 +45,7 @@ export type IconName =
   | 'alert-triangle'
   | 'copy'
   | 'eye'
+  | 'eye-off'
   | 'grid'
   | 'inbox'
   | 'list'
@@ -58,6 +61,7 @@ const iconPaths: Record<IconName, string[]> = {
   'alert-triangle': ['M10.3 3.9 1.8 18.1A2 2 0 0 0 3.5 21h17a2 2 0 0 0 1.7-2.9L13.7 3.9a2 2 0 0 0-3.4 0z', 'M12 9v4', 'M12 17h.01'],
   copy: ['M8 8h12v12H8z', 'M16 8V4H4v12h4'],
   eye: ['M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7-10-7-10-7z', 'M12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6z'],
+  'eye-off': ['M10.6 10.6a2 2 0 0 0 2.8 2.8', 'M9.9 5.2A10.7 10.7 0 0 1 12 5c6.4 0 10 7 10 7a15.7 15.7 0 0 1-3.1 3.8', 'M6.6 6.6C3.6 8.3 2 12 2 12s3.6 7 10 7a10.7 10.7 0 0 0 4.1-.8', 'm3 3 18 18'],
   grid: ['M3 3h7v7H3z', 'M14 3h7v7h-7z', 'M14 14h7v7h-7z', 'M3 14h7v7H3z'],
   inbox: ['M4 4h16l2 11h-6l-2 3h-4l-2-3H2L4 4z'],
   list: ['M8 6h13', 'M8 12h13', 'M8 18h13', 'M3 6h.01', 'M3 12h.01', 'M3 18h.01'],
@@ -87,6 +91,8 @@ const iconPaths: Record<IconName, string[]> = {
   'log-out': ['M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4', 'M16 17l5-5-5-5', 'M21 12H9'],
   mail: ['M4 4h16a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z', 'm22 6-10 7L2 6'],
   menu: ['M4 6h16', 'M4 12h16', 'M4 18h16'],
+  'panel-left-close': ['M3 3h18v18H3z', 'M9 3v18', 'm14 9-3 3 3 3'],
+  'panel-left-open': ['M3 3h18v18H3z', 'M9 3v18', 'm13 9 3 3-3 3'],
   'message-circle': ['M21 11.5a8.4 8.4 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.4 8.4 0 0 1-3.8-.9L3 21l1.9-5.7a8.4 8.4 0 0 1-.9-3.8A8.5 8.5 0 0 1 8.7 3.9a8.4 8.4 0 0 1 3.8-.9h.5a8.5 8.5 0 0 1 8 8z'],
   moon: ['M20.9 13A9 9 0 0 1 11 3.1 9 9 0 1 0 20.9 13z'],
   pill: ['m10.5 20.5 10-10a6 6 0 0 0-8.5-8.5l-10 10a6 6 0 0 0 8.5 8.5z', 'm8.5 8.5 7 7'],

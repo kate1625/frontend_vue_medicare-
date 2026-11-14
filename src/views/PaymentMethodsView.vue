@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { onMounted, reactive, ref } from 'vue'
 import { ApiError, apiRequest, getApiData } from '../services/api'
+import SkeletonLoader from '../components/SkeletonLoader.vue'
+import { notify } from '../services/toast'
 
 interface Method {
   payment_method_id: number
@@ -89,10 +91,12 @@ async function save() {
       body: JSON.stringify(form),
     })
     success.value = editing.value ? 'Payment method updated.' : 'Payment method added.'
+    notify.success(success.value, editing.value ? 'Payment method updated' : 'Payment method added')
     reset()
     await load()
   } catch (cause) {
     error.value = cause instanceof ApiError ? cause.message : 'Could not save payment method.'
+    notify.error(error.value, 'Payment method not saved')
   } finally {
     saving.value = false
   }
@@ -119,8 +123,10 @@ async function toggleMaintenance(row: Method) {
     success.value = maintenance(row)
       ? `${row.method_name} is available again.`
       : `${row.method_name} is now under maintenance and unavailable to patients.`
+    notify.success(success.value, 'Payment method updated')
   } catch (cause) {
     error.value = cause instanceof ApiError ? cause.message : 'Could not update this payment method’s maintenance status.'
+    notify.error(error.value, 'Payment method not updated')
   } finally {
     maintenanceSavingId.value = 0
   }
@@ -139,7 +145,6 @@ onMounted(load)
     <span class="methods-heading-note"><span></span> Patient checkout settings</span>
   </section>
 
-  <p v-if="success" class="alert alert-success methods-alert" role="status">{{ success }}</p>
   <p v-if="error && rows.length" class="alert alert-error methods-alert" role="alert">{{ error }}</p>
 
   <form class="surface payment-method-form" @submit.prevent="save">
@@ -216,9 +221,7 @@ onMounted(load)
     <span v-if="!loading && !error" class="methods-list-count">{{ rows.length }} {{ rows.length === 1 ? 'option' : 'options' }}</span>
   </section>
 
-  <section v-if="loading" class="surface empty-state methods-empty">
-    <span class="loading-dot" /><strong>Loading payment methods</strong><p>Just a moment while we get your payment options.</p>
-  </section>
+  <SkeletonLoader v-if="loading" variant="table" :rows="4" :columns="6" label="Loading configured payment methods" />
   <section v-else-if="error && !rows.length" class="surface empty-state methods-empty">
     <strong>Could not load payment methods</strong><p>{{ error }}</p><button class="button button-quiet" type="button" @click="load">Try again</button>
   </section>
@@ -303,7 +306,7 @@ onMounted(load)
 .methods-empty { min-height: 125px; justify-items: center; gap: 7px; padding: 24px; text-align: center; }
 .methods-empty p { max-width: 480px; margin: 0; color: #78879a; font-size: 11.9px; }
 .methods-table-wrap { border-radius: 14px; }
-.methods-table { min-width: 820px; }
+.methods-table { width: 100%; min-width: 820px; }
 .methods-table th { padding: 13px 16px; }
 .methods-table td { padding: 14px 16px; vertical-align: middle; }
 .methods-name { color: #35495b; font-size: 13px; }
@@ -318,18 +321,39 @@ onMounted(load)
 .methods-maintenance-action.is-maintenance { border-color: #d3e6da; background: #f3f9f5; color: #34745f; }
 .methods-maintenance-action:disabled { cursor: wait; opacity: .65; }
 .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; clip-path: inset(50%); }
-:global(:root[data-theme='dark']) .methods-form-heading h2,:global(:root[data-theme='dark']) .methods-list-heading h2,:global(:root[data-theme='dark']) .methods-toggle-copy strong,:global(:root[data-theme='dark']) .methods-name,:global(:root[data-theme='dark']) .methods-field > span:first-child { color: #e4ede9; }
-:global(:root[data-theme='dark']) .methods-form-heading > div > p:last-child,:global(:root[data-theme='dark']) .methods-form-footer > p,:global(:root[data-theme='dark']) .methods-field small,:global(:root[data-theme='dark']) .methods-toggle-copy small,:global(:root[data-theme='dark']) .methods-empty p { color: #a3b3ae; }
-:global(:root[data-theme='dark']) .methods-heading-note,:global(:root[data-theme='dark']) .methods-count,:global(:root[data-theme='dark']) .methods-list-count,:global(:root[data-theme='dark']) .methods-type { border-color: #40534b; background: #263630; color: #c1d0c9; }
-:global(:root[data-theme='dark']) .methods-field input,:global(:root[data-theme='dark']) .methods-field select,:global(:root[data-theme='dark']) .methods-field textarea { border-color: #40534b; background: #1d2a25; color: #e4ede9; }
-:global(:root[data-theme='dark']) .methods-toggle { border-color: #40534b; background: #263630; }
-:global(:root[data-theme='dark']) .methods-toggle:has(input:checked) { border-color: #456b55; background: #2b4037; }
-:global(:root[data-theme='dark']) .methods-form-footer { border-color: #354741; }
-:global(:root[data-theme='dark']) .methods-no-account { color: #a3b3ae; }
-:global(:root[data-theme='dark']) .methods-maintenance-hint { color: #a3b3ae; }
-:global(:root[data-theme='dark']) .methods-maintenance-action { border-color: #40534b; background: #263630; color: #d2dfd8; }
-:global(:root[data-theme='dark']) .methods-maintenance-action:hover:not(:disabled) { border-color: #806b43; background: #3a3428; color: #f0d7a2; }
-:global(:root[data-theme='dark']) .methods-maintenance-action.is-maintenance { border-color: #456b55; background: #2b4037; color: #c5e7d6; }
+:global(:root[data-theme='dark'] .methods-form-heading h2),
+:global(:root[data-theme='dark'] .methods-list-heading h2),
+:global(:root[data-theme='dark'] .methods-toggle-copy strong),
+:global(:root[data-theme='dark'] .methods-name),
+:global(:root[data-theme='dark'] .methods-field > span:first-child) { color: #e4ede9; }
+:global(:root[data-theme='dark'] .methods-form-heading > div > p:last-child),
+:global(:root[data-theme='dark'] .methods-form-footer > p),
+:global(:root[data-theme='dark'] .methods-field small),
+:global(:root[data-theme='dark'] .methods-toggle-copy small),
+:global(:root[data-theme='dark'] .methods-empty p),
+:global(:root[data-theme='dark'] .methods-maintenance-hint) { color: #b2c2bb; }
+:global(:root[data-theme='dark'] .methods-field i),
+:global(:root[data-theme='dark'] .methods-field em) { color: #b2c2bb; }
+:global(:root[data-theme='dark'] .methods-heading-note),
+:global(:root[data-theme='dark'] .methods-count),
+:global(:root[data-theme='dark'] .methods-list-count),
+:global(:root[data-theme='dark'] .methods-type) { border-color: #40534b; background: #263630; color: #d2dfd8; }
+:global(:root[data-theme='dark'] .methods-field input),
+:global(:root[data-theme='dark'] .methods-field select),
+:global(:root[data-theme='dark'] .methods-field textarea) { border-color: #40534b; background: #1d2a25; color: #f0f5f2; color-scheme: dark; }
+:global(:root[data-theme='dark'] .methods-field input::placeholder),
+:global(:root[data-theme='dark'] .methods-field textarea::placeholder) { color: #a3b3ae; opacity: 1; }
+:global(:root[data-theme='dark'] .methods-field select option) { background: #1d2a25; color: #f0f5f2; }
+:global(:root[data-theme='dark'] .methods-toggle) { border-color: #40534b; background: #263630; }
+:global(:root[data-theme='dark'] .methods-toggle:has(input:checked)) { border-color: #456b55; background: #2b4037; }
+:global(:root[data-theme='dark'] .methods-form-footer) { border-color: #354741; }
+:global(:root[data-theme='dark'] .methods-table th) { border-color: #354741; background: #263630; color: #cbd9d2; }
+:global(:root[data-theme='dark'] .methods-table td) { border-color: #354741; color: #e0eae4; }
+:global(:root[data-theme='dark'] .methods-table .table-secondary),
+:global(:root[data-theme='dark'] .methods-no-account) { color: #b2c2bb; }
+:global(:root[data-theme='dark'] .methods-maintenance-action) { border-color: #40534b; background: #263630; color: #d2dfd8; }
+:global(:root[data-theme='dark'] .methods-maintenance-action:hover:not(:disabled)) { border-color: #806b43; background: #3a3428; color: #f0d7a2; }
+:global(:root[data-theme='dark'] .methods-maintenance-action.is-maintenance) { border-color: #456b55; background: #2b4037; color: #c5e7d6; }
 @media (max-width: 760px) {
   .methods-heading { align-items: flex-start; flex-direction: column; gap: 13px; }
   .methods-form-grid,.methods-status-options { grid-template-columns: minmax(0, 1fr); }

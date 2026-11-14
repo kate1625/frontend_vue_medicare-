@@ -2,6 +2,7 @@
 import { onMounted, ref, watch } from 'vue'
 import { RouterLink, useRoute } from 'vue-router'
 import { ApiError, getApiData, getPatient, type Patient } from '../services/api'
+import SkeletonLoader from '../components/SkeletonLoader.vue'
 
 const route = useRoute()
 const patient = ref<Patient | null>(null)
@@ -59,7 +60,7 @@ watch(() => route.params.id, loadPatient)
 <template>
   <div class="detail-back"><RouterLink class="text-link" to="/patients">← Back to patients</RouterLink></div>
 
-  <div v-if="loading" class="surface detail-loading">Loading patient record…</div>
+  <SkeletonLoader v-if="loading" variant="profile" label="Loading patient record" />
   <div v-else-if="error" class="alert alert-error" role="alert">
     {{ error }} <RouterLink v-if="error.includes('not found')" class="text-link" to="/patients">Return to directory</RouterLink>
   </div>

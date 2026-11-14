@@ -2,6 +2,8 @@
 import { onMounted, ref, watch } from 'vue'
 import { RouterLink, useRoute } from 'vue-router'
 import { ApiError, apiRequest, getApiData } from '../services/api'
+import SkeletonLoader from '../components/SkeletonLoader.vue'
+import { notify } from '../services/toast'
 
 interface Appointment { appointment_id:number; patient_id:number; service_id:number; dentist_id:number|null; patient:string; patient_email:string|null; service_name:string; price:number|string; dentist:string|null; appt_date:string; appt_time:string; end_time:string|null; status:string; remarks:string|null; cancel_reason:string|null; reschedule_reason:string|null }
 interface HistoryEntry { log_id:number; action:string; table_name:string; record_id:number; created_at:string; actor:string }
@@ -47,8 +49,9 @@ async function setStatus(status: string) {
   try {
     await apiRequest(`/api/appointments/${appointment.value.appointment_id}/status`, { method: 'POST', body: JSON.stringify({ status }) })
     success.value = `Appointment marked ${status.replace('_', ' ')}.`
+    notify.success(success.value, 'Appointment updated')
     await load()
-  } catch (cause) { error.value = cause instanceof ApiError ? cause.message : 'Could not update appointment status.' }
+  } catch (cause) { error.value = cause instanceof ApiError ? cause.message : 'Could not update appointment status.'; notify.error(error.value, 'Appointment update failed') }
   finally { busy.value = false }
 }
 
@@ -59,7 +62,8 @@ async function notifyPatient() {
   try {
     const result = await apiRequest<{ message: string }>(`/api/appointments/${current.appointment_id}/email`, { method: 'POST' })
     success.value = result.message
-  } catch (cause) { error.value = cause instanceof ApiError ? cause.message : 'Could not send the appointment email.' }
+    notify.success(success.value, 'Email sent')
+  } catch (cause) { error.value = cause instanceof ApiError ? cause.message : 'Could not send the appointment email.'; notify.error(error.value, 'Email not sent') }
   finally { notifying.value = false }
 }
 
@@ -97,11 +101,13 @@ async function rescheduleAppointment() {
       body: JSON.stringify({ appt_date: rescheduleForm.value.date, appt_time: rescheduleForm.value.time }),
     })
     success.value = 'Appointment rescheduled. A confirmation email was sent to the patient.'
+    notify.success(success.value, 'Appointment rescheduled')
     await load()
     rescheduleForm.value = { date: '', time: '' }
     availableSlots.value = []
   } catch (cause) {
     error.value = cause instanceof ApiError ? cause.message : 'Could not reschedule the appointment.'
+    notify.error(error.value, 'Rescheduling failed')
   } finally {
     rescheduling.value = false
   }
@@ -114,11 +120,10 @@ watch(() => rescheduleForm.value.date, loadAvailableSlots)
 
 <template>
   <div class="detail-back"><RouterLink class="text-link" to="/staff/appointments">← Back to appointments</RouterLink></div>
-  <div v-if="loading" class="surface detail-loading">Loading appointment…</div>
+  <SkeletonLoader v-if="loading" variant="profile" label="Loading appointment details" />
   <div v-else-if="error" class="alert alert-error" role="alert">{{ error }} <button class="text-button" type="button" @click="load">Retry</button></div>
   <template v-else-if="appointment">
     <section class="page-heading"><div><p class="eyebrow">PAGE 15 · APPOINTMENT #{{ appointment.appointment_id }}</p><h1>Appointment details</h1><p class="muted">Status and visit information from the clinic database.</p></div><span class="status-badge" :class="`status-${appointment.status}`">{{ appointment.status.replace('_',' ') }}</span></section>
-    <div v-if="success" class="alert alert-success" role="status">{{ success }}</div>
     <section class="surface detail-card"><dl class="detail-grid">
       <div><dt>Patient</dt><dd>{{ appointment.patient }} · #{{ appointment.patient_id }}</dd></div>
       <div><dt>Service</dt><dd>{{ appointment.service_name }}</dd></div>

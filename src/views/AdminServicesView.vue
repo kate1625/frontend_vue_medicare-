@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { onMounted, reactive, ref } from 'vue'
 import { ApiError, apiRequest, getApiData } from '../services/api'
+import { notify } from '../services/toast'
 
 interface Service {
   service_id: number
@@ -63,10 +64,12 @@ async function save() {
       body: JSON.stringify({ ...form, price: Number(form.price), duration_min: Number(form.duration_min) }),
     })
     success.value = editingId.value ? 'Service updated.' : 'Service created.'
+    notify.success(success.value, editingId.value ? 'Service updated' : 'Service created')
     dialogOpen.value = false
     await load()
   } catch (cause) {
     error.value = cause instanceof ApiError ? cause.message : 'Could not save service.'
+    notify.error(error.value, 'Service not saved')
   } finally {
     saving.value = false
   }
@@ -77,9 +80,11 @@ async function archive(item: Service) {
   error.value = ''
   try {
     await apiRequest(`/api/services/${item.service_id}`, { method: 'DELETE' })
+    notify.success(`${item.service_name} was deactivated.`, 'Service deactivated')
     await load()
   } catch (cause) {
     error.value = cause instanceof ApiError ? cause.message : 'Could not deactivate service.'
+    notify.error(error.value, 'Service not deactivated')
   } finally {
     busy.value = 0
   }
@@ -94,15 +99,28 @@ onMounted(load)
 
 <template>
   <section class="page-heading services-heading">
-    <div><p class="eyebrow">PAGE 23 · ADMIN</p><h1>Services</h1><p class="muted">Manage active clinic services and prices.</p></div>
+    <div><h1>Services</h1><p class="muted">Manage active clinic services and prices.</p></div>
     <button class="button button-primary" type="button" @click="openCreate"><span aria-hidden="true">＋</span> Add service</button>
   </section>
   <p v-if="error && !dialogOpen" class="alert alert-error" role="alert">{{ error }}</p>
-  <p v-if="success" class="alert alert-success" role="status">{{ success }}</p>
-  <section v-if="loading" class="surface empty-state"><span class="loading-dot" /><strong>Loading services</strong></section>
+  <section v-if="loading" class="surface table-wrap service-skeleton-wrap" role="status" aria-label="Loading services">
+    <table class="data-table services-table services-skeleton-table" aria-hidden="true">
+      <thead><tr><th>Service</th><th>Category</th><th>Price</th><th>Appointment length</th><th>Status</th><th>Actions</th></tr></thead>
+      <tbody>
+        <tr v-for="index in 5" :key="index">
+          <td><span class="service-skeleton-line service-skeleton-name" /><span class="service-skeleton-line service-skeleton-description" /></td>
+          <td><span class="service-skeleton-line service-skeleton-category" /></td>
+          <td><span class="service-skeleton-line service-skeleton-price" /></td>
+          <td><span class="service-skeleton-line service-skeleton-duration" /></td>
+          <td><span class="service-skeleton-line service-skeleton-status" /></td>
+          <td><span class="service-skeleton-line service-skeleton-action" /><span class="service-skeleton-line service-skeleton-action" /></td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
   <section v-else-if="!rows.length" class="surface empty-state"><strong>No services found</strong><p>Add a service to make it available in the clinic catalog.</p></section>
   <section v-else class="surface table-wrap">
-    <table class="data-table">
+    <table class="data-table services-table">
       <thead><tr><th>Service</th><th>Category</th><th>Price</th><th>Appointment length</th><th>Status</th><th>Actions</th></tr></thead>
       <tbody>
         <tr v-for="item in rows" :key="item.service_id">
@@ -122,7 +140,7 @@ onMounted(load)
   <div v-if="dialogOpen" class="service-dialog-backdrop" @click.self="!saving && (dialogOpen = false)">
     <section class="surface service-dialog" role="dialog" aria-modal="true" aria-labelledby="service-dialog-title" aria-describedby="service-dialog-description">
       <header class="service-dialog-heading">
-        <div class="service-dialog-icon" aria-hidden="true">✦</div>
+
         <div class="service-dialog-title">
           <p class="service-dialog-kicker">{{ editingId ? 'UPDATE SERVICE' : 'SERVICE CATALOG' }}</p>
           <h2 id="service-dialog-title">{{ editingId ? 'Edit service details' : 'Add a clinic service' }}</h2>
@@ -185,6 +203,72 @@ onMounted(load)
 </template>
 
 <style scoped>
+.service-skeleton-wrap { overflow-x: auto; }
+.services-table {
+  width: 100%;
+  min-width: 860px;
+  table-layout: fixed;
+}
+.services-table th:nth-child(1),
+.services-table td:nth-child(1) { width: 24%; }
+.services-table th:nth-child(2),
+.services-table td:nth-child(2) { width: 16%; }
+.services-table th:nth-child(3),
+.services-table td:nth-child(3) { width: 12%; }
+.services-table th:nth-child(4),
+.services-table td:nth-child(4) { width: 17%; }
+.services-table th:nth-child(5),
+.services-table td:nth-child(5) { width: 11%; }
+.services-table th:nth-child(6),
+.services-table td:nth-child(6) { width: 20%; }
+.services-table td { white-space: normal; }
+.services-table td:first-child strong,
+.services-table td:first-child small { display: block; overflow-wrap: anywhere; }
+.services-table .service-actions { min-width: 0; }
+.services-table .service-actions .text-button {
+  display: block;
+  width: max-content;
+  max-width: 100%;
+  margin: 0 0 5px;
+  text-align: left;
+}
+.services-table .service-actions .text-button:last-child { margin-bottom: 0; }
+.services-table tbody tr { transition: background-color .16s ease; }
+.services-table tbody tr:hover { background: rgb(67 141 117 / 4%); }
+.services-skeleton-table { min-width: 860px; }
+.services-skeleton-table th { white-space: nowrap; }
+.services-skeleton-table td { min-width: 100px; }
+.service-skeleton-line {
+  position: relative;
+  display: block;
+  overflow: hidden;
+  height: 11px;
+  border-radius: 999px;
+  background: #e8efeb;
+}
+.service-skeleton-line::after {
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(90deg, transparent, rgb(255 255 255 / 82%), transparent);
+  content: '';
+  animation: service-skeleton-shimmer 1.5s ease-in-out infinite;
+}
+.services-skeleton-table tbody tr:nth-child(2) .service-skeleton-line::after { animation-delay: .12s; }
+.services-skeleton-table tbody tr:nth-child(3) .service-skeleton-line::after { animation-delay: .24s; }
+.services-skeleton-table tbody tr:nth-child(4) .service-skeleton-line::after { animation-delay: .36s; }
+.services-skeleton-table tbody tr:nth-child(5) .service-skeleton-line::after { animation-delay: .48s; }
+.service-skeleton-name { width: min(190px, 85%); height: 13px; margin-bottom: 8px; }
+.service-skeleton-description { width: min(250px, 95%); height: 9px; }
+.service-skeleton-category { width: 95px; }
+.service-skeleton-price { width: 72px; }
+.service-skeleton-duration { width: 83px; }
+.service-skeleton-status { width: 58px; height: 20px; border-radius: 999px; }
+.service-skeleton-action { display: inline-block; width: 58px; height: 10px; margin-right: 10px; vertical-align: middle; }
+@keyframes service-skeleton-shimmer { to { transform: translateX(100%); } }
+@media (prefers-reduced-motion: reduce) {
+  .service-skeleton-line::after { animation: none; transform: none; background: rgb(255 255 255 / 24%); }
+}
 .services-heading .button { gap: 8px; }
 .services-heading .button > span { font-size: 17px; line-height: 1; }
 .services-heading .muted { color: #5f6e82; font-size: 14px; }
@@ -252,25 +336,54 @@ onMounted(load)
 :global(:root[data-theme='dark']) :deep(.data-table td) { color: #d0dbd5; }
 :global(:root[data-theme='dark']) :deep(.data-table td strong:not(.service-price)) { color: #e4ede9; }
 :global(:root[data-theme='dark']) :deep(.data-table .table-secondary) { color: #afbeb8; }
+:global(:root[data-theme='dark'] .services-table td) { color: #e4ede9; }
+:global(:root[data-theme='dark'] .services-table td strong:not(.service-price)) { color: #fff; }
+:global(:root[data-theme='dark'] .services-table .table-secondary) { color: #e4ede9; }
 :global(:root[data-theme='dark']) :deep(.status-badge) { color: #e4ede9; }
-:global(:root[data-theme='dark']) .service-dialog-kicker { color: #9ed5b5; }
-:global(:root[data-theme='dark']) .service-field i,:global(:root[data-theme='dark']) .service-field em { color: #b2c0b9; }
-:global(:root[data-theme='dark']) .service-field i { color: #f0a9ae; }
-:global(:root[data-theme='dark']) .service-field input::placeholder,:global(:root[data-theme='dark']) .service-field textarea::placeholder { color: #a5b5ad; }
-:global(:root[data-theme='dark']) .service-field small,:global(:root[data-theme='dark']) .service-active-toggle small,:global(:root[data-theme='dark']) .service-dialog-footer > p { color: #b2c0b9; }
-:global(:root[data-theme='dark']) .service-price-input > span,:global(:root[data-theme='dark']) .service-duration-input > span { color: #d2dfd8; }
-:global(:root[data-theme='dark']) .service-active-toggle strong { color: #e4ede9; }
-:global(:root[data-theme='dark']) .service-dialog { border-color: #40534b; }
-:global(:root[data-theme='dark']) .service-dialog-title h2,:global(:root[data-theme='dark']) .service-field > span:first-child,:global(:root[data-theme='dark']) .service-active-toggle strong,:global(:root[data-theme='dark']) .service-price { color: #e4ede9; }
-:global(:root[data-theme='dark']) .service-dialog-title > p:last-child,:global(:root[data-theme='dark']) .service-field small,:global(:root[data-theme='dark']) .service-active-toggle small,:global(:root[data-theme='dark']) .service-dialog-footer > p { color: #a3b3ae; }
-:global(:root[data-theme='dark']) .service-close-button,:global(:root[data-theme='dark']) .service-field input,:global(:root[data-theme='dark']) .service-field textarea,:global(:root[data-theme='dark']) .service-price-input,:global(:root[data-theme='dark']) .service-duration-input { border-color: #40534b; background: #1d2a25; color: #e4ede9; }
-:global(:root[data-theme='dark']) .service-price-input > span { border-color: #40534b; background: #263630; }
-:global(:root[data-theme='dark']) .service-duration-input > span { border-color: #40534b; color: #c1d0c9; }
-:global(:root[data-theme='dark']) .service-active-toggle { border-color: #40534b; background: #263630; }
-:global(:root[data-theme='dark']) .service-active-toggle:has(input:checked) { border-color: #456b55; background: #2b4037; }
-:global(:root[data-theme='dark']) .service-dialog-footer { border-color: #354741; }
-:global(:root[data-theme='dark']) .service-form-error { border-color: #634044; background: #38282a; color: #efb8bd; }
-:global(:root[data-theme='dark']) .service-deactivate { color: #e7a1a6; }
+:global(html[data-theme='dark'] .services-heading .muted) { color: #b6c4bd; }
+:global(html[data-theme='dark'] .service-actions .text-button) { color: #a9dec1; }
+:global(html[data-theme='dark'] .service-actions .service-deactivate) { color: #f0a9ae; }
+:global(html[data-theme='dark'] .data-table th) { color: #c1d0c9; }
+:global(html[data-theme='dark'] .data-table td) { color: #d0dbd5; }
+:global(html[data-theme='dark'] .data-table td strong:not(.service-price)) { color: #e4ede9; }
+:global(html[data-theme='dark'] .data-table .table-secondary) { color: #afbeb8; }
+:global(html[data-theme='dark'] .services-table td) { color: #e4ede9; }
+:global(html[data-theme='dark'] .services-table td strong:not(.service-price)) { color: #fff; }
+:global(html[data-theme='dark'] .services-table .table-secondary) { color: #e4ede9; }
+:global(.app-shell[data-theme='dark'] .services-table tbody tr:hover) { background: rgb(138 198 160 / 7%); }
+:global(html[data-theme='dark'] .status-badge) { color: #e4ede9; }
+:global(html[data-theme='dark'] .service-dialog-kicker) { color: #9ed5b5; }
+:global(html[data-theme='dark'] .service-field i),
+:global(html[data-theme='dark'] .service-field em) { color: #b2c0b9; }
+:global(html[data-theme='dark'] .service-field i) { color: #f0a9ae; }
+:global(html[data-theme='dark'] .service-field input::placeholder),
+:global(html[data-theme='dark'] .service-field textarea::placeholder) { color: #a5b5ad; }
+:global(html[data-theme='dark'] .service-field small),
+:global(html[data-theme='dark'] .service-active-toggle small),
+:global(html[data-theme='dark'] .service-dialog-footer > p) { color: #a3b3ae; }
+:global(html[data-theme='dark'] .service-price-input > span),
+:global(html[data-theme='dark'] .service-duration-input > span) { color: #d2dfd8; }
+:global(html[data-theme='dark'] .service-active-toggle strong) { color: #e4ede9; }
+:global(html[data-theme='dark'] .service-dialog) { border-color: #40534b; }
+:global(html[data-theme='dark'] .service-dialog-title h2),
+:global(html[data-theme='dark'] .service-field > span:first-child),
+:global(html[data-theme='dark'] .service-price) { color: #e4ede9; }
+:global(html[data-theme='dark'] .service-dialog-title > p:last-child) { color: #b2c0b9; }
+:global(html[data-theme='dark'] .service-close-button),
+:global(html[data-theme='dark'] .service-field input),
+:global(html[data-theme='dark'] .service-field textarea),
+:global(html[data-theme='dark'] .service-price-input),
+:global(html[data-theme='dark'] .service-duration-input) { border-color: #40534b; background: #1d2a25; color: #e4ede9; }
+:global(html[data-theme='dark'] .service-close-button:hover:not(:disabled)) { border-color: #658675; background: #293d34; color: #e4ede9; }
+:global(html[data-theme='dark'] .service-price-input > span) { border-color: #40534b; background: #263630; }
+:global(html[data-theme='dark'] .service-duration-input > span) { border-color: #40534b; color: #c1d0c9; }
+:global(html[data-theme='dark'] .service-active-toggle) { border-color: #40534b; background: #263630; }
+:global(html[data-theme='dark'] .service-active-toggle:has(input:checked)) { border-color: #456b55; background: #2b4037; }
+:global(html[data-theme='dark'] .service-dialog-footer) { border-color: #354741; }
+:global(html[data-theme='dark'] .service-form-error) { border-color: #634044; background: #38282a; color: #efb8bd; }
+:global(html[data-theme='dark'] .service-deactivate) { color: #e7a1a6; }
+:global(.app-shell[data-theme='dark'] .service-skeleton-line) { background: #34473f; }
+:global(.app-shell[data-theme='dark'] .service-skeleton-line::after) { background: linear-gradient(90deg, transparent, rgb(174 214 192 / 22%), transparent); }
 @media (max-width: 600px) {
   .services-heading { align-items: flex-start; flex-direction: column; gap: 12px; }
   .service-dialog-backdrop { align-items: start; padding: 12px; }

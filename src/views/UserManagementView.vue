@@ -2,6 +2,8 @@
 import { onMounted, ref } from 'vue'
 import { ApiError, apiRequest, getApiData, getStaffUser } from '../services/api'
 import ConfirmDialog from '../components/ConfirmDialog.vue'
+import SkeletonLoader from '../components/SkeletonLoader.vue'
+import { notify } from '../services/toast'
 
 interface Account {
   user_id: number
@@ -48,9 +50,11 @@ async function setStatus(row: Account, status: Account['status']) {
   try {
     await apiRequest(`/api/users/${row.user_id}/status`, { method: 'POST', body: JSON.stringify({ status }) })
     success.value = `Account for ${row.username} updated.`
+    notify.success(success.value, 'Account updated')
     await load()
   } catch (cause) {
     error.value = cause instanceof ApiError ? cause.message : 'Could not update account.'
+    notify.error(error.value, 'Account not updated')
   } finally {
     busy.value = 0
   }
@@ -70,9 +74,11 @@ async function confirmArchive() {
   try {
     const result = await apiRequest<{ message: string }>(`/api/users/${row.user_id}`, { method: 'DELETE' })
     success.value = result.message
+    notify.success(success.value, 'Account archived')
     await load()
   } catch (cause) {
     error.value = cause instanceof ApiError ? cause.message : 'Could not archive this account.'
+    notify.error(error.value, 'Account not archived')
   } finally {
     busy.value = 0
   }
@@ -99,12 +105,11 @@ onMounted(load)
 
 <template>
   <section class="page-heading">
-    <div><p class="eyebrow">PAGE 27 · ADMIN</p><h1>User Management</h1><p class="muted">Review verification, account access, appointment activity, and payment balances.</p></div>
+    <div><h1>User Management</h1><p class="muted">Review verification, account access, appointment activity, and payment balances.</p></div>
     <button class="button button-quiet" type="button" :disabled="loading" @click="load">Refresh</button>
   </section>
   <p v-if="error" class="alert alert-error" role="alert">{{ error }}</p>
-  <p v-if="success" class="alert alert-success" role="status">{{ success }}</p>
-  <section v-if="loading" class="surface empty-state"><span class="loading-dot" /><strong>Loading accounts</strong></section>
+  <SkeletonLoader v-if="loading" variant="table" :rows="5" :columns="7" label="Loading user accounts" />
   <section v-else-if="!rows.length" class="surface empty-state"><strong>No accounts found</strong></section>
   <section v-else class="surface table-wrap">
     <table class="data-table">

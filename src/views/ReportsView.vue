@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { ApiError, getApiData } from '../services/api'
+import SkeletonLoader from '../components/SkeletonLoader.vue'
 
 let ChartConstructor: typeof import('chart.js').Chart | undefined
 async function loadChart() {
@@ -171,6 +172,7 @@ const selectedReport = ref('all')
 let statusChart: { destroy(): void } | null = null
 let revenueChart: { destroy(): void } | null = null
 let serviceChart: { destroy(): void } | null = null
+let themeObserver: MutationObserver | null = null
 
 const visibleSections = computed(() => selectedReport.value === 'all'
   ? reportSections
@@ -220,6 +222,10 @@ async function loadReport() {
 
 function renderCharts() {
   if (!report.value) return
+  const isDark = document.querySelector('.app-shell')?.getAttribute('data-theme') === 'dark'
+  const chartTextColor = isDark ? '#bdccc4' : '#586e60'
+  const chartTickColor = isDark ? '#a3b3ae' : '#819087'
+  const chartGridColor = isDark ? 'rgba(163, 179, 174, .16)' : 'rgba(119, 142, 128, .12)'
   statusChart?.destroy()
   revenueChart?.destroy()
   serviceChart?.destroy()
@@ -249,9 +255,10 @@ function renderCharts() {
         plugins: {
           legend: {
             position: 'bottom',
-            labels: { usePointStyle: true, pointStyle: 'circle', boxWidth: 8, boxHeight: 8, padding: 16 },
+            labels: { color: chartTextColor, usePointStyle: true, pointStyle: 'circle', boxWidth: 8, boxHeight: 8, padding: 16 },
           },
         },
+        color: chartTextColor,
       },
     })
     if (revenueCanvas.value) revenueChart = new Chart(revenueCanvas.value, {
@@ -275,14 +282,15 @@ function renderCharts() {
       options: {
         responsive: true,
         maintainAspectRatio: false,
-        plugins: { legend: { display: false } },
+        plugins: { legend: { display: false }, tooltip: { titleColor: '#f0f5f2', bodyColor: '#e0ece5' } },
+        color: chartTextColor,
         scales: {
-          x: { grid: { display: false }, border: { display: false }, ticks: { color: '#819087' } },
+          x: { grid: { display: false }, border: { display: false }, ticks: { color: chartTickColor } },
           y: {
             beginAtZero: true,
             border: { display: false },
-            grid: { color: 'rgba(119, 142, 128, .12)' },
-            ticks: { color: '#819087', callback: (value) => `₱${Number(value).toLocaleString('en-PH')}` },
+            grid: { color: chartGridColor },
+            ticks: { color: chartTickColor, callback: (value) => `₱${Number(value).toLocaleString('en-PH')}` },
           },
         },
       },
@@ -320,15 +328,16 @@ function renderCharts() {
           x: {
             beginAtZero: true,
             border: { display: false },
-            grid: { color: 'rgba(119, 142, 128, .12)' },
-            ticks: { precision: 0, color: '#819087', padding: 8 },
+            grid: { color: chartGridColor },
+            ticks: { precision: 0, color: chartTickColor, padding: 8 },
           },
           y: {
             border: { display: false },
             grid: { display: false },
-            ticks: { color: '#586e60', padding: 10, font: { size: 12, weight: 500 } },
+            ticks: { color: chartTextColor, padding: 10, font: { size: 12, weight: 500 } },
           },
         },
+        color: chartTextColor,
       },
     })
   }).catch((cause: unknown) => {
@@ -549,7 +558,16 @@ async function exportPdf() {
   }
 }
 
-onMounted(loadReport)
+onMounted(() => {
+  themeObserver = new MutationObserver(() => {
+    if (selectedReport.value === 'all' && report.value) {
+      void nextTick().then(renderCharts)
+    }
+  })
+  const appShell = document.querySelector('.app-shell')
+  if (appShell) themeObserver.observe(appShell, { attributes: true, attributeFilter: ['data-theme'] })
+  void loadReport()
+})
 watch(selectedReport, async (selection) => {
   if (selection === 'all' && report.value) {
     await nextTick()
@@ -563,13 +581,18 @@ watch(selectedReport, async (selection) => {
     serviceChart = null
   }
 })
-onBeforeUnmount(() => { statusChart?.destroy(); revenueChart?.destroy(); serviceChart?.destroy() })
+onBeforeUnmount(() => {
+  themeObserver?.disconnect()
+  statusChart?.destroy()
+  revenueChart?.destroy()
+  serviceChart?.destroy()
+})
 </script>
 
 <template>
   <section class="page-heading reports-heading">
     <div>
-      <p class="eyebrow">PAGE 30 · ADMIN</p>
+
       <h1>Clinic reports</h1>
       <p class="muted">Review and download organized clinic, patient, care, schedule, and finance reports.</p>
     </div>
@@ -614,11 +637,7 @@ onBeforeUnmount(() => { statusChart?.destroy(); revenueChart?.destroy(); service
 
   <p v-if="exportError" class="report-error" role="alert">{{ exportError }}</p>
 
-  <section v-if="loading && !report" class="surface empty-state">
-    <span class="loading-dot" aria-hidden="true" />
-    <strong>Preparing clinic reports</strong>
-    <p>Gathering records for your selected report period.</p>
-  </section>
+  <SkeletonLoader v-if="loading && !report" variant="reports" label="Preparing clinic reports" />
   <section v-else-if="error && !report" class="surface empty-state">
     <strong>Reports unavailable</strong>
     <p>{{ error }}</p>
@@ -801,28 +820,44 @@ onBeforeUnmount(() => { statusChart?.destroy(); revenueChart?.destroy(); service
 .report-table-limit { margin: .55rem 0 0; color: #829087; font-size: .75rem; }
 .back-to-reports { justify-self: start; }
 
-:global(:root[data-theme='dark']) .report-filter-panel,
-:global(:root[data-theme='dark']) .report-metric,
-:global(:root[data-theme='dark']) .report-card,
-:global(:root[data-theme='dark']) .report-data-card { border-color: #35473d; background: #202e28; }
-:global(:root[data-theme='dark']) .report-card-heading { border-bottom-color: #35473d; }
-:global(:root[data-theme='dark']) .chart-period { border-color: #3a4b41; background: #26362f; color: #b7c9bd; }
-:global(:root[data-theme='dark']) .status-chart-icon { background: #2b4435; color: #a7d4b4; }
-:global(:root[data-theme='dark']) .revenue-chart-icon { background: #2f3c50; color: #b9c9e6; }
-:global(:root[data-theme='dark']) .service-chart-icon { background: #3a354c; color: #c9b9ed; }
-:global(:root[data-theme='dark']) .report-filter-copy strong,
-:global(:root[data-theme='dark']) .report-metric strong,
-:global(:root[data-theme='dark']) .report-card h2,
-:global(:root[data-theme='dark']) .report-data-heading h2,
-:global(:root[data-theme='dark']) .report-table-heading h3 { color: #e0ebe4; }
-:global(:root[data-theme='dark']) .report-filter-field input,
-:global(:root[data-theme='dark']) .report-filter-field select { border-color: #405148; background: #26362f; color: #dce8e1; }
-:global(:root[data-theme='dark']) .report-category { border-color: #394b41; background: #26362f; color: #d1ded5; }
-:global(:root[data-theme='dark']) .report-category:hover { border-color: #6b9f7b; background: #2d4035; }
-:global(:root[data-theme='dark']) .report-data-table th { background: #2c3d33; color: #bdd2c3; }
-:global(:root[data-theme='dark']) .report-data-table td { border-color: #35473d; color: #cfdbd3; }
-:global(:root[data-theme='dark']) .report-period { background: #2a4032; color: #b6d6c0; }
-:global(:root[data-theme='dark']) .report-filter-note { color: #9eafa5; }
+:global(.app-shell[data-theme='dark'] .report-filter-panel),
+:global(.app-shell[data-theme='dark'] .report-metric),
+:global(.app-shell[data-theme='dark'] .report-card),
+:global(.app-shell[data-theme='dark'] .report-data-card) { border-color: #35473d; background: #202e28; }
+:global(.app-shell[data-theme='dark'] .report-card-heading) { border-bottom-color: #35473d; }
+:global(.app-shell[data-theme='dark'] .chart-period) { border-color: #3a4b41; background: #26362f; color: #d1ded5; }
+:global(.app-shell[data-theme='dark'] .status-chart-icon) { background: #2b4435; color: #a7d4b4; }
+:global(.app-shell[data-theme='dark'] .revenue-chart-icon) { background: #2f3c50; color: #b9c9e6; }
+:global(.app-shell[data-theme='dark'] .service-chart-icon) { background: #3a354c; color: #c9b9ed; }
+:global(.app-shell[data-theme='dark'] .report-filter-copy strong),
+:global(.app-shell[data-theme='dark'] .report-metric strong),
+:global(.app-shell[data-theme='dark'] .report-card h2),
+:global(.app-shell[data-theme='dark'] .report-data-heading h2),
+:global(.app-shell[data-theme='dark'] .report-table-heading h3),
+:global(.app-shell[data-theme='dark'] .report-category strong) { color: #e0ebe4; }
+:global(.app-shell[data-theme='dark'] .report-filter-copy span),
+:global(.app-shell[data-theme='dark'] .report-filter-field),
+:global(.app-shell[data-theme='dark'] .report-filter-field > span),
+:global(.app-shell[data-theme='dark'] .report-metric small),
+:global(.app-shell[data-theme='dark'] .report-card-heading p),
+:global(.app-shell[data-theme='dark'] .report-data-heading .muted),
+:global(.app-shell[data-theme='dark'] .report-table-heading p),
+:global(.app-shell[data-theme='dark'] .report-table-heading > span),
+:global(.app-shell[data-theme='dark'] .report-table-limit),
+:global(.app-shell[data-theme='dark'] .report-table-empty),
+:global(.app-shell[data-theme='dark'] .report-no-chart) { color: #b2c2bb; }
+:global(.app-shell[data-theme='dark'] .report-filter-field input),
+:global(.app-shell[data-theme='dark'] .report-filter-field select) { border-color: #405148; background: #26362f; color: #e0ece5; color-scheme: dark; }
+:global(.app-shell[data-theme='dark'] .report-filter-field input::placeholder) { color: #a3b3ae; }
+:global(.app-shell[data-theme='dark'] .report-category) { border-color: #394b41; background: #26362f; color: #d1ded5; }
+:global(.app-shell[data-theme='dark'] .report-category:hover) { border-color: #6b9f7b; background: #2d4035; }
+:global(.app-shell[data-theme='dark'] .report-category small) { color: #b2c2bb; }
+:global(.app-shell[data-theme='dark'] .report-data-table th) { background: #2c3d33; color: #d0e0d5; }
+:global(.app-shell[data-theme='dark'] .report-data-table td) { border-color: #35473d; color: #d7e5de; }
+:global(.app-shell[data-theme='dark'] .report-table-scroll) { border-color: #35473d; }
+:global(.app-shell[data-theme='dark'] .report-period) { background: #2a4032; color: #cce2d2; }
+:global(.app-shell[data-theme='dark'] .report-filter-note) { color: #b2c2bb; }
+:global(.app-shell[data-theme='dark'] .report-error) { color: #f0a6a6; }
 
 @media (max-width: 1050px) {
   .report-filter-panel { grid-template-columns: repeat(2, minmax(0, 1fr)); }

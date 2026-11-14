@@ -6,6 +6,12 @@ function pictureKey() {
   return `medicare.profile-picture.${user.id}`
 }
 
+export function getProfilePictureForUser(userId: number) {
+  if (!Number.isInteger(userId) || userId <= 0) return null
+  const picture = localStorage.getItem(`medicare.profile-picture.${userId}`)
+  return picture?.startsWith('data:image/jpeg;base64,') ? picture : null
+}
+
 export function getProfilePicture() {
   const picture = localStorage.getItem(pictureKey())
   if (picture && !picture.startsWith('data:image/jpeg;base64,')) {

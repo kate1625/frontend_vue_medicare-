@@ -3,6 +3,7 @@ export interface StaffUser {
   username: string
   email: string
   role: string
+  is_verified?: boolean
 }
 
 export type PortalRole = 'patient' | 'staff' | 'admin'
@@ -69,6 +70,12 @@ export function getStaffUser(): StaffUser | null {
     clearSession()
     return null
   }
+}
+
+export function updateStaffUser(updates: Partial<StaffUser>) {
+  const currentUser = getStaffUser()
+  if (!currentUser) return
+  sessionStorage.setItem(STAFF_USER_KEY, JSON.stringify({ ...currentUser, ...updates }))
 }
 
 export function getPortalRole(): PortalRole | null {

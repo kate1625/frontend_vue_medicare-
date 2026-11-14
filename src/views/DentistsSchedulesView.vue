@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
 import { ApiError, apiRequest, getApiData } from '../services/api'
+import SkeletonLoader from '../components/SkeletonLoader.vue'
+import { notify } from '../services/toast'
 
 interface ScheduleRow {
   dentist_id: number
@@ -76,10 +78,12 @@ async function save() {
     success.value = form.schedule_type === 'date'
       ? form.is_available ? 'Date-specific hours saved.' : 'Dentist marked unavailable for that date.'
       : 'Weekly hours added.'
+    notify.success(success.value, 'Schedule saved')
     resetForm()
     await load()
   } catch (cause) {
     error.value = cause instanceof ApiError ? cause.message : 'Could not save this schedule.'
+    notify.error(error.value, 'Schedule not saved')
   } finally {
     saving.value = false
   }
@@ -91,9 +95,11 @@ async function remove(id: number) {
   try {
     await apiRequest(`/api/dentist-schedules/${id}`, { method: 'DELETE' })
     success.value = 'Schedule removed.'
+    notify.success(success.value, 'Schedule removed')
     await load()
   } catch (cause) {
     error.value = cause instanceof ApiError ? cause.message : 'Could not remove schedule.'
+    notify.error(error.value, 'Schedule not removed')
   }
 }
 
@@ -129,7 +135,6 @@ onMounted(load)
   </section>
 
   <p v-if="error" class="alert alert-error schedule-alert" role="alert">{{ error }}</p>
-  <p v-if="success" class="alert alert-success schedule-alert" role="status">{{ success }}</p>
 
   <form class="surface schedule-form" @submit.prevent="save">
     <header class="schedule-form-heading">
@@ -217,7 +222,7 @@ onMounted(load)
     <span v-if="!loading && schedules.length" class="schedule-list-count">{{ schedules.length }} entries</span>
   </section>
 
-  <section v-if="loading" class="surface empty-state schedule-empty"><span class="loading-dot" /><strong>Loading schedules</strong><p>Just a moment while we get the dentist hours.</p></section>
+  <SkeletonLoader v-if="loading" variant="table" :rows="5" :columns="5" label="Loading saved dentist schedules" />
   <section v-else-if="!schedules.length" class="surface empty-state schedule-empty">
     <strong>No schedules added yet</strong>
     <p>Once you add weekly hours or a specific-date change, it will appear here.</p>
@@ -287,17 +292,36 @@ onMounted(load)
 .schedule-table .status-badge { display: inline-flex; }
 .schedule-table .actions-cell { min-width: 82px; text-align: right; }
 .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; clip-path: inset(50%); }
-:global(:root[data-theme='dark']) .schedule-form-heading h2,:global(:root[data-theme='dark']) .schedule-list-heading h2,:global(:root[data-theme='dark']) .schedule-no-dentists strong,:global(:root[data-theme='dark']) .schedule-availability strong { color: #e4ede9; }
-:global(:root[data-theme='dark']) .schedule-form-heading > div > p:last-child,:global(:root[data-theme='dark']) .schedule-form-footer p,:global(:root[data-theme='dark']) .schedule-no-dentists p,:global(:root[data-theme='dark']) .schedule-empty p { color: #a3b3ae; }
-:global(:root[data-theme='dark']) .schedule-count,:global(:root[data-theme='dark']) .schedule-list-count,:global(:root[data-theme='dark']) .schedule-type-badge { border-color: #40534b; background: #263630; color: #c1d0c9; }
-:global(:root[data-theme='dark']) .schedule-field,:global(:root[data-theme='dark']) .schedule-field-label { color: #d2dfd8; }
-:global(:root[data-theme='dark']) .schedule-field select,:global(:root[data-theme='dark']) .schedule-field input { border-color: #40534b; background-color: #1d2a25; color: #e4ede9; }
-:global(:root[data-theme='dark']) .schedule-field small,:global(:root[data-theme='dark']) .schedule-availability small { color: #a3b3ae; }
-:global(:root[data-theme='dark']) .schedule-type-options button { border-color: #40534b; background: #263630; color: #d2dfd8; }
-:global(:root[data-theme='dark']) .schedule-type-options button.active { border-color: #5a9677; background: #2b4037; }
-:global(:root[data-theme='dark']) .schedule-type-options button small { color: #a3b3ae; }
-:global(:root[data-theme='dark']) .schedule-availability,:global(:root[data-theme='dark']) .schedule-no-dentists { border-color: #40534b; background: #263630; }
-:global(:root[data-theme='dark']) .schedule-form-footer { border-color: #354741; }
+:global(:root[data-theme='dark'] .schedule-form-heading h2),
+:global(:root[data-theme='dark'] .schedule-list-heading h2),
+:global(:root[data-theme='dark'] .schedule-no-dentists strong),
+:global(:root[data-theme='dark'] .schedule-availability strong) { color: #e4ede9; }
+:global(:root[data-theme='dark'] .schedule-form-heading > div > p:last-child),
+:global(:root[data-theme='dark'] .schedule-form-footer p),
+:global(:root[data-theme='dark'] .schedule-no-dentists p),
+:global(:root[data-theme='dark'] .schedule-empty p) { color: #b2c2bb; }
+:global(:root[data-theme='dark'] .schedule-count),
+:global(:root[data-theme='dark'] .schedule-list-count),
+:global(:root[data-theme='dark'] .schedule-type-badge) { border-color: #40534b; background: #263630; color: #d2dfd8; }
+:global(:root[data-theme='dark'] .schedule-field),
+:global(:root[data-theme='dark'] .schedule-field-label),
+:global(:root[data-theme='dark'] .schedule-field > span:first-child) { color: #e0eae4; }
+:global(:root[data-theme='dark'] .schedule-field > span:first-child i) { color: #b2c2bb; }
+:global(:root[data-theme='dark'] .schedule-field select),
+:global(:root[data-theme='dark'] .schedule-field input) { border-color: #40534b; background-color: #1d2a25; color: #f0f5f2; color-scheme: dark; }
+:global(:root[data-theme='dark'] .schedule-field select option) { background: #1d2a25; color: #f0f5f2; }
+:global(:root[data-theme='dark'] .schedule-field small),
+:global(:root[data-theme='dark'] .schedule-availability small) { color: #b2c2bb; }
+:global(:root[data-theme='dark'] .schedule-type-options button) { border-color: #40534b; background: #263630; color: #e0eae4; }
+:global(:root[data-theme='dark'] .schedule-type-options button.active) { border-color: #5a9677; background: #2b4037; }
+:global(:root[data-theme='dark'] .schedule-type-options button small) { color: #b2c2bb; }
+:global(:root[data-theme='dark'] .schedule-availability),
+:global(:root[data-theme='dark'] .schedule-no-dentists) { border-color: #40534b; background: #263630; }
+:global(:root[data-theme='dark'] .schedule-form-footer) { border-color: #354741; }
+:global(:root[data-theme='dark'] .schedule-table .data-table th) { border-color: #354741; background: #263630; color: #cbd9d2; }
+:global(:root[data-theme='dark'] .schedule-table .data-table td) { border-color: #354741; color: #e0eae4; }
+:global(:root[data-theme='dark'] .schedule-table .data-table td strong) { color: #f0f5f2; }
+:global(:root[data-theme='dark'] .schedule-table .data-table td small) { color: #b2c2bb; }
 @media (max-width: 760px) {
   .schedule-fields { grid-template-columns: minmax(0, 1fr); gap: 15px; }
   .schedule-availability { grid-column: auto; }

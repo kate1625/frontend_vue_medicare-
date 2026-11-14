@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { ApiError, apiRequest, getApiData, getPatient, getPatients, getPortalRole, type Patient } from '../services/api'
+import SkeletonLoader from '../components/SkeletonLoader.vue'
+import { notify } from '../services/toast'
 
 interface Appointment {
   appointment_id: number
@@ -164,6 +166,7 @@ async function issuePrescription() {
       : response.data.notification_sent
         ? 'Prescription saved and the patient was notified in MediCare+. Email could not be sent; verify the patient email and Brevo configuration.'
         : 'Prescription saved, but email delivery could not be confirmed. Check the patient email and Brevo configuration.'
+    notify.success(success.value, 'Prescription saved')
     try {
       prescriptions.value = await getApiData<Prescription[]>('/api/prescriptions')
     } catch (cause) {
@@ -173,6 +176,7 @@ async function issuePrescription() {
     }
   } catch (cause) {
     error.value = cause instanceof ApiError ? cause.message : 'Could not save this prescription.'
+    notify.error(error.value, 'Prescription not saved')
   } finally {
     saving.value = false
   }
@@ -202,16 +206,15 @@ onMounted(load)
   <div class="prescription-workspace">
     <section class="page-heading">
       <div>
-        <p class="eyebrow">{{ isPatient ? 'MY CARE' : 'PATIENT CARE · CLINICAL WORKSPACE' }}</p>
+        <p class="eyebrow">{{ isPatient ? '' : 'PATIENT CARE · CLINICAL WORKSPACE' }}</p>
         <h1>{{ isPatient ? 'My prescriptions' : 'Prescriptions' }}</h1>
         <p class="muted">{{ isPatient ? 'Review medication instructions recorded by your care team.' : 'Review active patients, visit details, and care history before documenting a prescription.' }}</p>
       </div>
     </section>
 
     <div v-if="error" class="alert alert-error" role="alert">{{ error }}</div>
-    <div v-if="success" class="alert alert-success" role="status">{{ success }}</div>
 
-    <section v-if="loading" class="surface empty-state"><span class="loading-dot" /><strong>Loading prescriptions</strong></section>
+    <SkeletonLoader v-if="loading" :variant="isPatient ? 'list' : 'care'" :rows="4" label="Loading prescriptions" />
 
     <template v-else-if="isPatient">
       <section class="surface prescription-panel">
@@ -256,7 +259,7 @@ onMounted(load)
       </section>
 
       <section v-else class="prescription-detail">
-        <div v-if="detailLoading" class="surface empty-state"><span class="loading-dot" /><strong>Loading patient care history</strong></div>
+        <SkeletonLoader v-if="detailLoading" variant="profile" :contained="true" label="Loading patient care history" />
         <template v-else>
           <section class="surface patient-summary">
             <div class="patient-avatar large">{{ selectedPatient.first_name.charAt(0) }}{{ selectedPatient.last_name.charAt(0) }}</div>

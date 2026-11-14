@@ -195,7 +195,7 @@ onBeforeUnmount(() => {
   <div class="dashboard-page" :class="{ 'admin-dashboard': isAdmin }">
     <section class="page-heading">
       <div>
-        <p class="eyebrow">PAGE {{ String(pageNumber).padStart(2, '0') }} · {{ isAdmin ? 'ADMIN' : 'STAFF' }}</p>
+
         <h1>{{ isAdmin ? 'Admin Dashboard' : 'Staff Dashboard' }}</h1>
         <p class="muted">Live clinic totals and activity from the clinic database.</p>
       </div>
@@ -204,7 +204,50 @@ onBeforeUnmount(() => {
       </RouterLink>
     </section>
 
-    <section v-if="loading" class="surface empty-state"><span class="loading-dot" /><strong>Loading dashboard</strong></section>
+    <section v-if="loading" class="dashboard-loading" role="status" aria-label="Loading dashboard">
+      <div class="stats-grid dashboard-skeleton-stats" aria-hidden="true">
+        <article v-for="index in (isAdmin ? 6 : 4)" :key="index" class="stat-card dashboard-skeleton-card">
+          <span class="dashboard-skeleton-shape dashboard-skeleton-icon" />
+          <span class="dashboard-skeleton-shape dashboard-skeleton-label" />
+          <span class="dashboard-skeleton-shape dashboard-skeleton-value" />
+          <span v-if="index === 1 || !isAdmin" class="dashboard-skeleton-shape dashboard-skeleton-note" />
+        </article>
+      </div>
+
+      <div v-if="isAdmin" class="dashboard-shortcuts dashboard-skeleton-shortcuts" aria-hidden="true">
+        <div v-for="index in 3" :key="index" class="dashboard-shortcut dashboard-skeleton-shortcut">
+          <span class="dashboard-skeleton-shape dashboard-skeleton-shortcut-icon" />
+          <span class="dashboard-skeleton-shortcut-copy">
+            <span class="dashboard-skeleton-shape dashboard-skeleton-shortcut-title" />
+            <span class="dashboard-skeleton-shape dashboard-skeleton-shortcut-note" />
+          </span>
+        </div>
+      </div>
+
+      <div class="report-grid dashboard-skeleton-reports" aria-hidden="true">
+        <article
+          v-for="index in (isAdmin ? 3 : 2)"
+          :key="index"
+          class="surface report-card dashboard-skeleton-report"
+        >
+          <span class="dashboard-skeleton-shape dashboard-skeleton-report-title" />
+          <div class="dashboard-skeleton-plot" :class="{ 'is-donut': index === 1 }">
+            <span v-if="index === 1" class="dashboard-skeleton-donut" />
+            <div v-else class="dashboard-skeleton-bars">
+              <i v-for="bar in 6" :key="bar" />
+            </div>
+          </div>
+        </article>
+      </div>
+
+      <section v-if="!isAdmin" class="surface dashboard-skeleton-upcoming" aria-hidden="true">
+        <span class="dashboard-skeleton-shape dashboard-skeleton-report-title" />
+        <div v-for="index in 2" :key="index" class="dashboard-skeleton-appointment">
+          <span class="dashboard-skeleton-shape dashboard-skeleton-appointment-copy" />
+          <span class="dashboard-skeleton-shape dashboard-skeleton-appointment-action" />
+        </div>
+      </section>
+    </section>
     <section v-else-if="error" class="surface empty-state"><strong>Dashboard unavailable</strong><p>{{ error }}</p></section>
 
     <template v-else-if="admin">
@@ -213,7 +256,7 @@ onBeforeUnmount(() => {
         <article class="stat-card"><span class="stat-icon stat-icon-green"><UiIcon name="stethoscope" /></span><p>Active dentists</p><strong>{{ admin.dentists }}</strong></article>
         <article class="stat-card"><span class="stat-icon stat-icon-green"><UiIcon name="user-round" /></span><p>Accounts</p><strong>{{ admin.users }}</strong></article>
         <article class="stat-card"><span class="stat-icon stat-icon-green"><UiIcon name="briefcase-medical" /></span><p>Active services</p><strong>{{ admin.active_services }}</strong></article>
-        <article class="stat-card"><span class="stat-icon stat-icon-green"><UiIcon name="wallet" /></span><p>Unpaid appointment charges</p><strong>{{ Number(admin.outstanding_balance).toLocaleString('en-PH', { style: 'currency', currency: 'PHP' }) }}</strong><small>Calculated from service fees less verified payments</small></article>
+        <article class="stat-card stat-card-balance"><span class="stat-icon stat-icon-green"><UiIcon name="wallet" /></span><p>Unpaid appointment charges</p><strong>{{ Number(admin.outstanding_balance).toLocaleString('en-PH', { style: 'currency', currency: 'PHP' }) }}</strong><small>Calculated from service fees less verified payments</small></article>
         <article class="stat-card"><span class="stat-icon stat-icon-green"><UiIcon name="credit-card-check" /></span><p>Payments to verify</p><strong>{{ admin.pending_payments }}</strong></article>
       </div>
 

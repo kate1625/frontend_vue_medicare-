@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { onMounted, reactive, ref } from 'vue'
 import { ApiError, apiRequest, getApiData } from '../services/api'
+import SkeletonLoader from '../components/SkeletonLoader.vue'
+import { notify } from '../services/toast'
 
 async function loadPdf() {
   const [jspdfMod, autoTableMod] = await Promise.all([import('jspdf'), import('jspdf-autotable')])
@@ -37,8 +39,8 @@ async function load() {
 }
 async function save() {
   saving.value = true; error.value = ''; success.value = ''
-  try { const result = await apiRequest<{ message: string }>('/api/patient/profile', { method: 'PUT', body: JSON.stringify(form) }); success.value = result.message; await load() }
-  catch (cause) { error.value = cause instanceof ApiError ? cause.message : 'Could not save your profile.' }
+  try { const result = await apiRequest<{ message: string }>('/api/patient/profile', { method: 'PUT', body: JSON.stringify(form) }); success.value = result.message; notify.success(result.message, 'Profile updated'); await load() }
+  catch (cause) { error.value = cause instanceof ApiError ? cause.message : 'Could not save your profile.'; notify.error(error.value, 'Profile not saved') }
   finally { saving.value = false }
 }
 async function exportHistory() {
@@ -53,7 +55,7 @@ onMounted(load)
 <template>
   <section class="page-heading">
     <div class="page-heading-copy">
-      <p class="eyebrow">PAGE 11 · PATIENT</p>
+      <p class="eyebrow"></p>
       <h1>Profile &amp; Medical History</h1>
       <p class="muted">Update your contact details and review treatment records.</p>
     </div>
@@ -62,7 +64,7 @@ onMounted(load)
     </button>
   </section>
 
-  <section v-if="loading" class="surface empty-state"><span class="loading-dot" /><strong>Loading profile</strong></section>
+  <SkeletonLoader v-if="loading" variant="patient-profile" label="Loading your profile and medical history" />
   <section v-else-if="error && !data" class="surface empty-state">
     <strong>Profile unavailable</strong>
     <p>{{ error }}</p>
@@ -118,7 +120,6 @@ onMounted(load)
       </div>
 
       <p v-if="error" class="form-message form-error">{{ error }}</p>
-      <p v-if="success" class="form-message form-success">{{ success }}</p>
     </form>
 
     <section class="surface feature-card patient-chart">
@@ -422,6 +423,94 @@ onMounted(load)
 .recommended-return small {
   color: #6a7b85;
   line-height: 1.45;
+}
+
+:global(.app-shell[data-theme='dark'] .profile-card),
+:global(.app-shell[data-theme='dark'] .feature-card) {
+  border-color: #354741;
+  background: #1d2b26;
+  color: #d7e5de;
+}
+
+:global(.app-shell[data-theme='dark'] .card-header) {
+  border-color: #354741;
+}
+
+:global(.app-shell[data-theme='dark'] .card-header h2),
+:global(.app-shell[data-theme='dark'] .feature-header h2),
+:global(.app-shell[data-theme='dark'] .history-top strong),
+:global(.app-shell[data-theme='dark'] .chart-conditions strong) {
+  color: #e4ede9;
+}
+
+:global(.app-shell[data-theme='dark'] .profile-card .eyebrow),
+:global(.app-shell[data-theme='dark'] .field),
+:global(.app-shell[data-theme='dark'] .field span),
+:global(.app-shell[data-theme='dark'] .helper-text),
+:global(.app-shell[data-theme='dark'] .feature-header .muted),
+:global(.app-shell[data-theme='dark'] .empty-inline),
+:global(.app-shell[data-theme='dark'] .history-meta),
+:global(.app-shell[data-theme='dark'] .history-notes) {
+  color: #b2c2bb;
+}
+
+:global(.app-shell[data-theme='dark'] .field input),
+:global(.app-shell[data-theme='dark'] .field textarea) {
+  border-color: #40534b;
+  background: #202f29;
+  color: #e4ede9;
+  color-scheme: dark;
+}
+
+:global(.app-shell[data-theme='dark'] .field input::placeholder),
+:global(.app-shell[data-theme='dark'] .field textarea::placeholder) {
+  color: #a3b3ae;
+  opacity: 1;
+}
+
+:global(.app-shell[data-theme='dark'] .field input:focus),
+:global(.app-shell[data-theme='dark'] .field textarea:focus) {
+  border-color: #70b894;
+  background: #263630;
+}
+
+:global(.app-shell[data-theme='dark'] .form-footer) {
+  border-color: #354741;
+}
+
+:global(.app-shell[data-theme='dark'] .state-badge) {
+  border: 1px solid #426d55;
+  background: #244231;
+  color: #a4e2ba;
+}
+
+:global(.app-shell[data-theme='dark'] .chart-conditions article),
+:global(.app-shell[data-theme='dark'] .history-item) {
+  border-color: #40534b;
+  background: #202e2a;
+}
+
+:global(.app-shell[data-theme='dark'] .chart-conditions span) {
+  color: #9cdbb4;
+}
+
+:global(.app-shell[data-theme='dark'] .chart-conditions small),
+:global(.app-shell[data-theme='dark'] .history-top time) {
+  color: #a3b3ae;
+}
+
+:global(.app-shell[data-theme='dark'] .recommended-return) {
+  border-color: #426d55;
+  background: #263a30;
+  color: #c9ded1;
+}
+
+:global(.app-shell[data-theme='dark'] .recommended-return small) {
+  color: #b2c2bb;
+}
+
+:global(.app-shell[data-theme='dark'] .form-success) {
+  color: #9cdbb4;
 }
 
 @media (max-width: 760px) {

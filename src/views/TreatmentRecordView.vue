@@ -2,6 +2,8 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import { RouterLink } from 'vue-router'
 import { ApiError, apiRequest, getApiData, getPatients, type Patient } from '../services/api'
+import SkeletonLoader from '../components/SkeletonLoader.vue'
+import { notify } from '../services/toast'
 interface Appointment { appointment_id:number; patient_id:number; service_name:string; appt_date:string; status:string; dentist_id:number|null }
 interface Dentist { dentist_id:number; display_name:string; specialization:string|null }
 const appointments=ref<Appointment[]>([]); const patients=ref<Patient[]>([]); const dentists=ref<Dentist[]>([]); const loading=ref(true); const saving=ref(false); const error=ref(''); const success=ref('')
@@ -17,7 +19,7 @@ const availableDentists = computed(() => {
 async function loadOptions(){loading.value=true;error.value='';try{const [a,p,o]=await Promise.all([getApiData<Appointment[]>('/api/appointments'),getPatients(),getApiData<{dentists:Dentist[]}>('/api/public/overview')]);appointments.value=a;patients.value=p.filter((patient)=>patient.status==='active');dentists.value=o.dentists}catch(e){error.value=e instanceof ApiError?e.message:'Could not load patients, appointments, and dentists.'}finally{loading.value=false}}
 function selectPatient(){form.appointment_id='';form.dentist_id=''}
 function selectAppointment(){form.dentist_id=selectedAppointment.value?.dentist_id ? String(selectedAppointment.value.dentist_id) : ''}
-async function save(){saving.value=true;error.value='';success.value='';if(!form.diagnosis.trim()&&!form.treatment_done.trim()){error.value='Enter a diagnosis or describe the treatment performed before saving.';saving.value=false;return}try{const result=await apiRequest<{data:{notification_sent:boolean}}>('/api/treatment-records',{method:'POST',body:JSON.stringify({...form,appointment_id:Number(form.appointment_id),dentist_id:Number(form.dentist_id)})});success.value=form.follow_up_date?(result.data.notification_sent?'Treatment record and recommended return date saved. The patient was notified in MediCare+.':'Treatment record and recommended return date saved. The date appears in the patient’s history; no linked patient account was available for an in-app notification.'):'Treatment record saved. You can view it in Dental Records and the selected patient’s record.';form.tooth_no='';form.diagnosis='';form.treatment_done='';form.notes='';form.follow_up_date=''}catch(e){error.value=e instanceof ApiError?e.message:'Could not save treatment record.'}finally{saving.value=false}}
+async function save(){saving.value=true;error.value='';success.value='';if(!form.diagnosis.trim()&&!form.treatment_done.trim()){error.value='Enter a diagnosis or describe the treatment performed before saving.';saving.value=false;return}try{const result=await apiRequest<{data:{notification_sent:boolean}}>('/api/treatment-records',{method:'POST',body:JSON.stringify({...form,appointment_id:Number(form.appointment_id),dentist_id:Number(form.dentist_id)})});success.value=form.follow_up_date?(result.data.notification_sent?'Treatment record and recommended return date saved. The patient was notified in MediCare+.':'Treatment record and recommended return date saved. The date appears in the patient’s history; no linked patient account was available for an in-app notification.'):'Treatment record saved. You can view it in Dental Records and the selected patient’s record.';form.tooth_no='';form.diagnosis='';form.treatment_done='';form.notes='';form.follow_up_date=''}catch(e){error.value=e instanceof ApiError?e.message:'Could not save treatment record.';notify.error(error.value,'Treatment record not saved')}finally{saving.value=false}}
 onMounted(loadOptions)
 </script>
 <template>
@@ -29,10 +31,9 @@ onMounted(loadOptions)
     </div>
     <span class="treatment-private-note"><span aria-hidden="true">●</span> Clinical documentation</span>
   </section>
+  <p v-if="success" class="form-success treatment-success" role="status">{{ success }} <RouterLink to="/staff/records">Open Dental Records</RouterLink></p>
 
-  <section v-if="loading" class="surface empty-state treatment-state">
-    <span class="loading-dot"/><strong>Loading appointments and dentists</strong><p>We’re getting the clinic details ready.</p>
-  </section>
+  <SkeletonLoader v-if="loading" variant="form" label="Loading treatment form options" />
   <section v-else-if="error && (!patients.length || !appointments.length || !dentists.length)" class="surface empty-state treatment-state">
     <strong>Could not load the treatment form</strong><p>{{ error }}</p><button class="button button-quiet" type="button" @click="loadOptions">Try again</button>
   </section>
@@ -116,7 +117,6 @@ onMounted(loadOptions)
     </section>
 
     <p v-if="error" class="form-error treatment-error" role="alert">{{ error }}</p>
-    <p v-if="success" class="form-success treatment-success" role="status">{{ success }} <RouterLink to="/staff/records">Open Dental Records</RouterLink></p>
     <footer class="treatment-form-footer">
       <p>Double-check the appointment and clinical details before saving.</p>
       <button class="button button-primary" :disabled="saving">{{ saving?'Saving treatment record…':'Save treatment record' }}</button>
@@ -163,15 +163,32 @@ onMounted(loadOptions)
 .treatment-form-footer .button { min-height: 43px; flex: 0 0 auto; padding-inline: 18px; border-radius: 9px; }
 .treatment-state { min-height: 140px; justify-items: center; gap: 9px; padding: 25px; text-align: center; }
 .treatment-state p { margin: 0; color: #78879a; font-size: 11.9px; }
-:global(:root[data-theme='dark']) .treatment-form-heading h2,:global(:root[data-theme='dark']) .treatment-section-title h3,:global(:root[data-theme='dark']) .treatment-field > span:first-child,:global(:root[data-theme='dark']) .treatment-visit-summary > strong { color: #e4ede9; }
-:global(:root[data-theme='dark']) .treatment-form-heading > div > p:last-child,:global(:root[data-theme='dark']) .treatment-section-title p,:global(:root[data-theme='dark']) .treatment-field small,:global(:root[data-theme='dark']) .treatment-required-note,:global(:root[data-theme='dark']) .treatment-form-footer p,:global(:root[data-theme='dark']) .treatment-state p { color: #a3b3ae; }
-:global(:root[data-theme='dark']) .treatment-private-note { border-color: #40534b; background: #263630; color: #c1d0c9; }
-:global(:root[data-theme='dark']) .treatment-form-section + .treatment-form-section,:global(:root[data-theme='dark']) .treatment-form-footer { border-color: #354741; }
-:global(:root[data-theme='dark']) .treatment-section-title > span { background: #2b4037; color: #b9e2cd; }
-:global(:root[data-theme='dark']) .treatment-field { color: #d2dfd8; }
-:global(:root[data-theme='dark']) .treatment-field input,:global(:root[data-theme='dark']) .treatment-field select,:global(:root[data-theme='dark']) .treatment-field textarea { border-color: #40534b; background: #1d2a25; color: #e4ede9; }
-:global(:root[data-theme='dark']) .treatment-visit-summary { border-color: #40534b; background: #263630; }
-:global(:root[data-theme='dark']) .treatment-visit-summary > span:last-child { color: #a3b3ae; }
+:global(.app-shell[data-theme='dark'] .treatment-form-heading h2),
+:global(.app-shell[data-theme='dark'] .treatment-section-title h3),
+:global(.app-shell[data-theme='dark'] .treatment-field > span:first-child),
+:global(.app-shell[data-theme='dark'] .treatment-visit-summary > strong) { color: #e4ede9; }
+:global(.app-shell[data-theme='dark'] .treatment-form-heading > div > p:last-child),
+:global(.app-shell[data-theme='dark'] .treatment-section-title p),
+:global(.app-shell[data-theme='dark'] .treatment-field small),
+:global(.app-shell[data-theme='dark'] .treatment-required-note),
+:global(.app-shell[data-theme='dark'] .treatment-form-footer p),
+:global(.app-shell[data-theme='dark'] .treatment-state p) { color: #a3b3ae; }
+:global(.app-shell[data-theme='dark'] .treatment-private-note) { border-color: #40534b; background: #263630; color: #c1d0c9; }
+:global(.app-shell[data-theme='dark'] .treatment-form-section + .treatment-form-section),
+:global(.app-shell[data-theme='dark'] .treatment-form-footer) { border-color: #354741; }
+:global(.app-shell[data-theme='dark'] .treatment-section-title > span) { background: #2b4037; color: #b9e2cd; }
+:global(.app-shell[data-theme='dark'] .treatment-field) { color: #d2dfd8; }
+:global(.app-shell[data-theme='dark'] .treatment-field input),
+:global(.app-shell[data-theme='dark'] .treatment-field select),
+:global(.app-shell[data-theme='dark'] .treatment-field textarea) { border-color: #40534b; background: #1d2a25; color: #e4ede9; color-scheme: dark; }
+:global(.app-shell[data-theme='dark'] .treatment-field input::placeholder),
+:global(.app-shell[data-theme='dark'] .treatment-field textarea::placeholder) { color: #82988d; }
+:global(.app-shell[data-theme='dark'] .treatment-field select:disabled) { border-color: #354741; background: #263630; color: #9aaca5; opacity: 1; }
+:global(.app-shell[data-theme='dark'] .treatment-field > span:first-child i) { color: #f0a3a8; }
+:global(.app-shell[data-theme='dark'] .treatment-field i),
+:global(.app-shell[data-theme='dark'] .treatment-field em) { color: #a3b3ae; }
+:global(.app-shell[data-theme='dark'] .treatment-visit-summary) { border-color: #40534b; background: #263630; }
+:global(.app-shell[data-theme='dark'] .treatment-visit-summary > span:last-child) { color: #a3b3ae; }
 @media (max-width: 760px) {
   .treatment-heading { align-items: flex-start; flex-direction: column; gap: 13px; }
   .treatment-fields { grid-template-columns: minmax(0, 1fr); gap: 15px; }

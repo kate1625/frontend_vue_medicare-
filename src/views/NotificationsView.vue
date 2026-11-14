@@ -2,6 +2,8 @@
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ApiError, apiRequest, getApiData, getPortalRole } from '../services/api'
+import SkeletonLoader from '../components/SkeletonLoader.vue'
+import { notify } from '../services/toast'
 
 interface AppNotification {
   id: number
@@ -95,6 +97,7 @@ async function openNotification(notice: AppNotification) {
     await router.push(destination)
   } catch (cause) {
     actionError.value = cause instanceof ApiError ? cause.message : 'Could not open this notification.'
+    notify.error(actionError.value, 'Notification could not be opened')
   } finally {
     busyId.value = null
   }
@@ -107,8 +110,10 @@ async function markAllRead() {
     await apiRequest('/api/notifications/read-all', { method: 'POST' })
     notifications.value.forEach((notice) => { notice.is_read = true })
     window.dispatchEvent(new Event('medicare:notifications-change'))
+    notify.success('All notifications have been marked as read.', 'Notifications updated')
   } catch (cause) {
     actionError.value = cause instanceof ApiError ? cause.message : 'Could not mark notifications as read.'
+    notify.error(actionError.value, 'Notifications not updated')
   } finally {
     markingAll.value = false
   }
@@ -120,7 +125,7 @@ onMounted(loadNotifications)
 <template>
   <section class="page-heading notification-heading">
     <div>
-      <p class="eyebrow">{{ isPatient ? 'PATIENT SPACE' : role === 'admin' ? 'ADMIN WORKSPACE' : 'CLINIC WORKSPACE' }}</p>
+
       <h1>Notifications</h1>
       <p class="muted">Appointment and payment updates for your account.</p>
     </div>
@@ -131,10 +136,7 @@ onMounted(loadNotifications)
 
   <p v-if="actionError" class="notice-feedback" role="alert">{{ actionError }}</p>
 
-  <section v-if="loading" class="surface empty-state">
-    <span class="loading-dot" />
-    <strong>Loading notifications</strong>
-  </section>
+  <SkeletonLoader v-if="loading" variant="list" :rows="5" label="Loading notifications" />
 
   <section v-else-if="error" class="surface empty-state">
     <strong>Notifications unavailable</strong>
@@ -246,15 +248,22 @@ button.notice-card:disabled { cursor: progress; opacity: .7; }
 .status-inactive { background: #f1f3f5; color: #6d7d88; }
 .email-empty { max-width: 980px; }
 
-:global(:root[data-theme='dark']) .notice-card { border-color: #36463f; background: #202e28; color: #dce8e1; }
-:global(:root[data-theme='dark']) .notice-card.unread { border-left-color: #82c39a; background: #26382e; }
-:global(:root[data-theme='dark']) .notice-body strong,
-:global(:root[data-theme='dark']) .section-heading h2 { color: #e0ebe4; }
-:global(:root[data-theme='dark']) .notice-detail { color: #bdcdc3; }
-:global(:root[data-theme='dark']) .notice-body time { color: #9eafa5; }
-:global(:root[data-theme='dark']) .notice-icon { background: #304538; color: #a7d4b4; }
-:global(:root[data-theme='dark']) .email-icon { background: #303b4e; color: #b7c9e6; }
-:global(:root[data-theme='dark']) .notice-state { color: #a7d4b4; }
+:global(.app-shell[data-theme='dark'] .notice-card) { border-color: #36463f; background: #202e28; color: #dce8e1; }
+:global(.app-shell[data-theme='dark'] .notice-card.unread) { border-left-color: #82c39a; background: #26382e; }
+:global(.app-shell[data-theme='dark'] .notice-body strong),
+:global(.app-shell[data-theme='dark'] .section-heading h2) { color: #e0ebe4; }
+:global(.app-shell[data-theme='dark'] .notice-detail) { color: #bdcdc3; }
+:global(.app-shell[data-theme='dark'] .notice-body time) { color: #aebdb4; }
+:global(.app-shell[data-theme='dark'] .notice-icon) { background: #304538; color: #a7d4b4; }
+:global(.app-shell[data-theme='dark'] .email-icon) { background: #303b4e; color: #b7c9e6; }
+:global(.app-shell[data-theme='dark'] .notice-state) { color: #a7d4b4; }
+:global(.app-shell[data-theme='dark'] .notice-card:hover:not(:disabled)) { border-color: #70a887; background: #2b4035; }
+:global(.app-shell[data-theme='dark'] .notice-card.unread:hover:not(:disabled)) { background: #314a39; }
+:global(.app-shell[data-theme='dark'] .notice-feedback) { color: #f0a6a6; }
+:global(.app-shell[data-theme='dark'] .notice-error) { color: #f0a6a6; }
+:global(.app-shell[data-theme='dark'] .email-card .status-confirmed) { background: #244231; color: #a4e2ba; }
+:global(.app-shell[data-theme='dark'] .email-card .status-cancelled) { background: #40272a; color: #f0a6a6; }
+:global(.app-shell[data-theme='dark'] .email-card .status-inactive) { background: #354741; color: #c1d0c9; }
 
 @media (max-width: 760px) {
   .notification-heading { align-items: flex-start; }

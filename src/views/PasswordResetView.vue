@@ -3,6 +3,7 @@ import { computed, ref, watch } from 'vue'
 import { RouterLink, useRoute } from 'vue-router'
 import { ApiError, apiRequest } from '../services/api'
 import UiIcon from '../components/UiIcon.vue'
+import { notify } from '../services/toast'
 
 const route = useRoute()
 const email = ref('')
@@ -52,7 +53,7 @@ async function request() {
     message.value = result.data.message
     requested.value = true
     requestStatus.value = result.data.status
-  } catch (cause) { error.value = cause instanceof ApiError ? cause.message : 'We could not send your reset instructions. Please try again.' }
+  } catch (cause) { error.value = cause instanceof ApiError ? cause.message : 'We could not send your reset instructions. Please try again.'; notify.error(error.value, 'Reset link not sent') }
   finally { busy.value = false }
 }
 
@@ -63,7 +64,8 @@ async function confirm() {
   try {
     const result = await apiRequest<{ message: string }>('/api/auth/password-reset/confirm', { method: 'POST', body: JSON.stringify({ token: token.value, password: password.value }) })
     message.value = result.message; completed.value = true; token.value = ''; password.value = ''; confirmPassword.value = ''
-  } catch (cause) { error.value = cause instanceof ApiError ? cause.message : 'We could not update your password. Request a fresh reset link and try again.' }
+    notify.success(result.message, 'Password updated')
+  } catch (cause) { error.value = cause instanceof ApiError ? cause.message : 'We could not update your password. Request a fresh reset link and try again.'; notify.error(error.value, 'Password not updated') }
   finally { busy.value = false }
 }
 </script>
@@ -72,7 +74,7 @@ async function confirm() {
   <main class="auth-page">
     <RouterLink class="brand auth-brand" to="/"><span class="brand-mark" aria-hidden="true"><UiIcon name="plus" /></span><span>MediCare<span class="brand-accent">+</span></span></RouterLink>
     <section class="surface auth-card">
-      <span class="auth-symbol" aria-hidden="true"><UiIcon name="key" /></span>
+
       <p class="eyebrow">ACCOUNT RECOVERY</p>
       <h1>{{ checkingToken ? 'Verifying reset link…' : invalidToken ? 'Reset link expired or invalid' : verificationError ? 'Unable to verify reset link' : completed ? 'You’re all set' : token ? 'Choose a new password' : requested && requestStatus === 'sent' ? 'Reset link sent' : requested && requestStatus === 'not_found' ? 'Account not found' : requested && requestStatus === 'unverified' ? 'Verify your account first' : requested && requestStatus === 'inactive' ? 'Account inactive' : 'Forgot your password?' }}</h1>
       <p class="muted auth-description">{{ checkingToken ? 'Please wait while we verify your secure reset link.' : invalidToken ? 'This reset link is invalid or has expired. Request a new link to continue.' : verificationError ? 'We could not check your reset link right now. Please try again.' : completed ? 'Your password has been updated. You can sign in with your new password now.' : token ? 'Create a strong password to secure your MediCare+ account.' : requested && requestStatus === 'sent' ? 'Check your inbox and spam folder, then open the reset link to continue.' : requested && requestStatus === 'not_found' ? 'Check the spelling of the email address or create a MediCare+ account.' : requested && requestStatus === 'unverified' ? 'Complete email verification before requesting a password reset.' : requested && requestStatus === 'inactive' ? 'Contact the clinic if you think this account should be active.' : 'It happens. Enter the email address linked to your account and we’ll send you a secure reset link.' }}</p>

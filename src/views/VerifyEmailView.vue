@@ -3,6 +3,7 @@ import { nextTick, onMounted, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ApiError, apiRequest } from '../services/api'
 import UiIcon from '../components/UiIcon.vue'
+import { notify } from '../services/toast'
 
 const route = useRoute()
 const router = useRouter()
@@ -107,10 +108,12 @@ async function submit() {
       body: JSON.stringify({ email: form.email.trim(), code: form.code.trim() }),
     })
     success.value = result.message
+    notify.success(result.message, 'Email verified')
     sessionStorage.removeItem('medicare_verify_email')
     await router.replace({ path: '/login', query: { notice: 'registered' } })
   } catch (cause) {
     error.value = cause instanceof ApiError ? cause.message : 'Could not verify email.'
+    notify.error(error.value, 'Email verification failed')
     if (await handleAlreadyVerified(error.value)) return
   } finally {
     busy.value = false

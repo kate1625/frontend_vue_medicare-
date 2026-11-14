@@ -3,6 +3,7 @@ import { computed, onMounted, ref } from 'vue'
 import { RouterLink } from 'vue-router'
 import { ApiError, getPatients, type Patient } from '../services/api'
 import UiIcon from '../components/UiIcon.vue'
+import SkeletonLoader from '../components/SkeletonLoader.vue'
 
 const patients = ref<Patient[]>([])
 const error = ref('')
@@ -75,7 +76,7 @@ onMounted(loadPatients)
       <RouterLink class="text-link" to="/patients">See all patients <UiIcon name="arrow-right" /></RouterLink>
     </div>
 
-    <div v-if="loading" class="empty-state">Loading patient records…</div>
+    <SkeletonLoader v-if="loading" variant="table" :rows="4" :columns="5" :contained="true" label="Loading recent patient records" />
     <div v-else-if="!recentPatients.length && !error" class="empty-state">
       <span class="empty-icon"><UiIcon name="users-round" /></span>
       <strong>Your directory is ready</strong>

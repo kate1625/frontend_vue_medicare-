@@ -2,6 +2,8 @@
 import { computed, onMounted, ref } from 'vue'
 import { ApiError, apiRequest, getApiData } from '../services/api'
 import UiIcon from '../components/UiIcon.vue'
+import SkeletonLoader from '../components/SkeletonLoader.vue'
+import { notify } from '../services/toast'
 
 interface PendingPayment {
   payment_id: number
@@ -20,7 +22,7 @@ interface PendingPayment {
   status: 'pending' | 'verified' | 'rejected' | 'refunded'
   verification_source: 'clinic' | 'paymongo'
 }
-interface PaymentHistory extends PendingPayment {}
+type PaymentHistory = PendingPayment
 
 const rows = ref<PendingPayment[]>([])
 const historyRows = ref<PaymentHistory[]>([])
@@ -97,19 +99,26 @@ async function setStatus(row: PendingPayment, status: 'verified' | 'rejected') {
       })
       message.value = `Payment #${row.payment_id} ${status}.`
     }
+    notify.success(message.value, status === 'verified' ? 'Payment verified' : 'Payment rejected')
     await load()
   } catch (error) {
     actionError.value = error instanceof ApiError ? error.message : 'Could not update payment.'
+    notify.error(actionError.value, 'Payment update failed')
   } finally {
     busy.value = 0
   }
 }
 
-function copyRef(ref: string | null) {
+async function copyRef(ref: string | null) {
   if (!ref) return
-  navigator.clipboard.writeText(ref)
-  message.value = 'Reference code copied to clipboard'
-  setTimeout(() => { message.value = '' }, 2000)
+  try {
+    await navigator.clipboard.writeText(ref)
+    message.value = 'Reference code copied to clipboard'
+    notify.info(message.value, 'Reference copied')
+    setTimeout(() => { message.value = '' }, 2000)
+  } catch {
+    notify.error('Could not copy the reference code. Please select and copy it manually.', 'Copy failed')
+  }
 }
 
 function getInitials(name: string) {
@@ -192,9 +201,6 @@ onMounted(load)
     </section>
 
     <!-- Alerts -->
-    <p v-if="message" class="alert alert-success">
-      <UiIcon name="check-circle" /> {{ message }}
-    </p>
     <p v-if="actionError" class="alert alert-error" role="alert">
       <UiIcon name="alert-circle" /> {{ actionError }}
     </p>
@@ -227,11 +233,7 @@ onMounted(load)
       </div>
     </section>
 
-    <!-- Loading State -->
-    <section v-if="loading" class="loading-state">
-      <span class="loading-spinner"></span>
-      <p>Loading payments...</p>
-    </section>
+    <SkeletonLoader v-if="loading" :variant="viewMode === 'card' ? 'cards' : 'table'" :rows="4" :columns="7" label="Loading payment verification records" />
 
     <!-- Error State -->
     <section v-else-if="loadError" class="error-state">
@@ -1077,62 +1079,168 @@ onMounted(load)
 .btn-reject-sm { background: #fef2f2; color: #dc2626; }
 .btn-view-sm { background: #f1f5f9; color: #475569; }
 
-:global(:root[data-theme='dark']) .verification-page,
-:global(:root[data-theme='dark']) .payment-verification-page,
-:global(:root[data-theme='dark']) .verification-card,
-:global(:root[data-theme='dark']) .payment-card,
-:global(:root[data-theme='dark']) .table-container,
-:global(:root[data-theme='dark']) .controls-bar,
-:global(:root[data-theme='dark']) .payment-row,
-:global(:root[data-theme='dark']) .payment-details,
-:global(:root[data-theme='dark']) .filter-bar,
-:global(:root[data-theme='dark']) .metric-card {
+:global(.app-shell[data-theme='dark'] .payment-verification-page) {
+  background: transparent;
+  color: #d7e5de;
+}
+
+:global(.app-shell[data-theme='dark'] .payment-card),
+:global(.app-shell[data-theme='dark'] .table-container),
+:global(.app-shell[data-theme='dark'] .metric-card),
+:global(.app-shell[data-theme='dark'] .filter-tabs),
+:global(.app-shell[data-theme='dark'] .view-toggle),
+:global(.app-shell[data-theme='dark'] .loading-state),
+:global(.app-shell[data-theme='dark'] .error-state),
+:global(.app-shell[data-theme='dark'] .empty-state) {
   border-color: #3b5148;
   background: #1d2b26;
   color: #d7e5de;
 }
 
-:global(:root[data-theme='dark']) .verification-page h1,
-:global(:root[data-theme='dark']) .payment-verification-page h1,
-:global(:root[data-theme='dark']) .verification-page h2,
-:global(:root[data-theme='dark']) .payment-verification-page h2,
-:global(:root[data-theme='dark']) .verification-page h3,
-:global(:root[data-theme='dark']) .payment-verification-page h3,
-:global(:root[data-theme='dark']) .verification-page strong {
+:global(.app-shell[data-theme='dark'] .payment-verification-page h1),
+:global(.app-shell[data-theme='dark'] .payment-verification-page h2),
+:global(.app-shell[data-theme='dark'] .payment-verification-page h3),
+:global(.app-shell[data-theme='dark'] .payment-verification-page strong),
+:global(.app-shell[data-theme='dark'] .payment-verification-page .amount),
+:global(.app-shell[data-theme='dark'] .payment-verification-page .metric-count),
+:global(.app-shell[data-theme='dark'] .payment-verification-page .metric-amount-single) {
   color: #e6f0eb;
 }
 
-:global(:root[data-theme='dark']) .verification-page p,
-:global(:root[data-theme='dark']) .payment-verification-page p,
-:global(:root[data-theme='dark']) .verification-page label,
-:global(:root[data-theme='dark']) .payment-verification-page label,
-:global(:root[data-theme='dark']) .verification-page small {
+:global(.app-shell[data-theme='dark'] .payment-verification-page p),
+:global(.app-shell[data-theme='dark'] .payment-verification-page label),
+:global(.app-shell[data-theme='dark'] .payment-verification-page small),
+:global(.app-shell[data-theme='dark'] .payment-verification-page .subtitle),
+:global(.app-shell[data-theme='dark'] .payment-verification-page .metric-label),
+:global(.app-shell[data-theme='dark'] .payment-verification-page .metric-amount),
+:global(.app-shell[data-theme='dark'] .payment-verification-page .info-label),
+:global(.app-shell[data-theme='dark'] .payment-verification-page .payments-table th),
+:global(.app-shell[data-theme='dark'] .payment-verification-page .payment-history-status small) {
   color: #a9bdb3;
 }
 
-:global(:root[data-theme='dark']) .verification-page input,
-:global(:root[data-theme='dark']) .payment-verification-page input,
-:global(:root[data-theme='dark']) .verification-page select,
-:global(:root[data-theme='dark']) .payment-verification-page select,
-:global(:root[data-theme='dark']) .verification-page textarea {
+:global(.app-shell[data-theme='dark'] .payment-verification-page .patient-name),
+:global(.app-shell[data-theme='dark'] .payment-verification-page .info-value),
+:global(.app-shell[data-theme='dark'] .payment-verification-page .payments-table td) {
+  color: #d7e5de;
+}
+
+:global(.app-shell[data-theme='dark'] .payment-verification-page input),
+:global(.app-shell[data-theme='dark'] .payment-verification-page select),
+:global(.app-shell[data-theme='dark'] .payment-verification-page textarea),
+:global(.app-shell[data-theme='dark'] .payment-verification-page .ref-chip),
+:global(.app-shell[data-theme='dark'] .payment-verification-page .ref-chip-sm) {
   border-color: #496258;
   background: #202f29;
   color: #e0ece5;
 }
 
-:global(:root[data-theme='dark']) .metric-icon-yellow,
-:global(:root[data-theme='dark']) .method-maya {
+:global(.app-shell[data-theme='dark'] .payment-verification-page .search-input::placeholder) {
+  color: #a3b3ae;
+}
+
+:global(.app-shell[data-theme='dark'] .payment-verification-page .filter-select) {
+  background-color: #202f29;
+  background-image: none;
+  appearance: auto;
+  color-scheme: dark;
+  min-width: 150px;
+  padding-right: 0.875rem;
+}
+
+:global(.app-shell[data-theme='dark'] .payment-verification-page .refresh-btn),
+:global(.app-shell[data-theme='dark'] .payment-verification-page .btn-icon) {
+  border-color: #496258;
+  background: #263630;
+  color: #c1d0c9;
+}
+
+:global(.app-shell[data-theme='dark'] .payment-verification-page .refresh-btn:hover:not(:disabled)),
+:global(.app-shell[data-theme='dark'] .payment-verification-page .btn-icon:hover) {
+  background: #31453c;
+  color: #e0ece5;
+}
+
+:global(.app-shell[data-theme='dark'] .payment-verification-page .card-actions),
+:global(.app-shell[data-theme='dark'] .payment-verification-page .payments-table thead) {
+  border-color: #3b5148;
+  background: #24332e;
+}
+
+:global(.app-shell[data-theme='dark'] .payment-verification-page .payments-table tbody tr) {
+  border-color: #354741;
+}
+
+:global(.app-shell[data-theme='dark'] .payment-verification-page .filter-tabs),
+:global(.app-shell[data-theme='dark'] .payment-verification-page .view-toggle) {
+  background: #202f29;
+}
+
+:global(.app-shell[data-theme='dark'] .payment-verification-page .tab-btn:not(.active)),
+:global(.app-shell[data-theme='dark'] .payment-verification-page .view-btn:not(.active)) {
+  color: #bdccc4;
+}
+
+:global(.app-shell[data-theme='dark'] .payment-verification-page .tab-btn:not(.active) .tab-count) {
+  background: #354741;
+  color: #d7e5de;
+}
+
+:global(.app-shell[data-theme='dark'] .payment-verification-page .metric-icon-yellow),
+:global(.app-shell[data-theme='dark'] .payment-verification-page .method-maya) {
   background: #403821;
   color: #f0d48b;
 }
 
-:global(:root[data-theme='dark']) .method-cash,
-:global(:root[data-theme='dark']) .btn-view-sm {
+:global(.app-shell[data-theme='dark'] .payment-verification-page .metric-icon-green),
+:global(.app-shell[data-theme='dark'] .payment-verification-page .method-gcash),
+:global(.app-shell[data-theme='dark'] .payment-verification-page .btn-verify-sm) {
+  background: #244231;
+  color: #a4e2ba;
+}
+
+:global(.app-shell[data-theme='dark'] .payment-verification-page .metric-icon-blue) {
+  background: #263947;
+  color: #b6dcf6;
+}
+
+:global(.app-shell[data-theme='dark'] .payment-verification-page .method-cash),
+:global(.app-shell[data-theme='dark'] .payment-verification-page .btn-view-sm) {
   background: #263a32;
   color: #c4d8cc;
 }
 
-:global(:root[data-theme='dark']) .btn-reject-sm {
+:global(.app-shell[data-theme='dark'] .payment-verification-page .method-bank-transfer) {
+  background: #263947;
+  color: #b6dcf6;
+}
+
+:global(.app-shell[data-theme='dark'] .payment-verification-page .btn-reject),
+:global(.app-shell[data-theme='dark'] .payment-verification-page .btn-reject-sm) {
+  background: #40272a;
+  border-color: #754849;
+  color: #f0a6a6;
+}
+
+:global(.app-shell[data-theme='dark'] .payment-verification-page .status-pending) {
+  background: #403821;
+  color: #f0d48b;
+}
+
+:global(.app-shell[data-theme='dark'] .payment-verification-page .paymongo-alert) {
+  border-color: #806b3e;
+  background: #403821;
+  color: #f0d48b;
+}
+
+:global(.app-shell[data-theme='dark'] .payment-verification-page .alert-success) {
+  border-color: #426d55;
+  background: #244231;
+  color: #a4e2ba;
+}
+
+:global(.app-shell[data-theme='dark'] .payment-verification-page .alert-error) {
+  border-color: #754849;
   background: #40272a;
   color: #f0a6a6;
 }

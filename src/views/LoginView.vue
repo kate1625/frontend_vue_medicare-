@@ -62,11 +62,11 @@ async function submit() {
   error.value = ''
   pending.value = true
   try {
-    await signIn(identity.value.trim(), password.value)
+    const user = await signIn(identity.value.trim(), password.value)
     const role = getPortalRole()
     const defaultPortal = role === 'patient' ? '/patient/dashboard' : role === 'admin' ? '/admin/dashboard' : '/staff/dashboard'
     const redirect = typeof route.query.redirect === 'string' ? route.query.redirect : defaultPortal
-    await router.replace(redirect)
+    await router.replace(role === 'patient' && !user.is_verified ? '/settings/profile' : redirect)
   } catch (cause) {
     error.value = cause instanceof ApiError ? cause.message : 'Unable to sign in. Please try again.'
   } finally {
@@ -142,7 +142,7 @@ async function submit() {
       <form class="login-form" @submit.prevent="submit">
         <p class="eyebrow">WELCOME BACK</p>
         <h2>Sign in to your account</h2>
-        <p class="muted">Enter your account credentials to continue.</p>
+        <p class="muted"></p>
 
         <div v-if="error" class="alert alert-error" role="alert">{{ error }}</div>
 

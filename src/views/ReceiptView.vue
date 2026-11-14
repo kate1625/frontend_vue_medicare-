@@ -2,6 +2,7 @@
 import { onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { ApiError, getApiData } from '../services/api'
+import SkeletonLoader from '../components/SkeletonLoader.vue'
 
 async function loadQr() {
   const mod = await import('qrcode')
@@ -130,7 +131,89 @@ async function exportPdf() {
 }
 onMounted(load); watch(() => route.query.id, load)
 </script>
-<template><div class="receipt-page"><section class="page-heading receipt-page-heading"><div><p class="eyebrow">PATIENT PORTAL · BILLING</p><h1>Payment Receipts</h1><p class="muted">View your submitted payments, verification status, and downloadable receipts.</p></div><button v-if="receipt" class="button button-primary" @click="exportPdf">Download PDF</button></section><section v-if="loading" class="surface empty-state"><span class="loading-dot"/><strong>Loading receipts</strong></section><section v-else-if="error" class="surface empty-state"><strong>Receipts unavailable</strong><p>{{ error }}</p><RouterLink to="/patient/payment">Go to payments</RouterLink></section><section v-else-if="!receipt" class="surface receipt-list-panel"><div class="receipt-list-heading"><div><p class="payment-step">PAYMENT HISTORY</p><h2>Your receipts</h2><p>Select a receipt to view the full details and download a PDF copy.</p></div><RouterLink class="button button-quiet" to="/patient/payment">Make a payment</RouterLink></div><div v-if="receipts.length" class="receipt-list"><article v-for="item in receipts" :key="item.payment_id" class="receipt-list-item"><div class="receipt-list-icon">₱</div><div class="receipt-list-main"><strong>{{ item.receipt_no || `Payment #${item.payment_id}` }}</strong><p>{{ item.service_name }}</p><small>Appointment: {{ item.appt_date }} {{ item.appt_time }} · {{ item.payment_plan === 'downpayment' ? `${item.payment_percent}% downpayment` : 'Full payment' }} · <b>₱{{ Number(item.amount).toLocaleString('en-PH', { minimumFractionDigits: 2 }) }}</b></small></div><span class="status-badge" :data-status="item.status">{{ item.status === 'pending' ? 'Pending verification' : item.status }}</span><RouterLink class="receipt-view-link" :to="{ path: '/patient/receipt', query: { id: item.payment_id } }">View receipt <span aria-hidden="true">→</span></RouterLink></article></div><div v-else class="empty-state"><strong>No payment receipts yet</strong><p>After you submit a payment, its receipt will appear here immediately.</p><RouterLink to="/patient/payment">Go to payments</RouterLink></div></section><article v-else class="surface receipt-card receipt-detail"><div class="receipt-detail-header"><div><p class="eyebrow">TOOTH DOCTOR · PAYMENT</p><h2>{{ receipt.receipt_no }}</h2></div><span class="status-badge" :data-status="receipt.status">{{ receipt.status === 'pending' ? 'Pending clinic verification' : receipt.status }}</span></div><p class="receipt-detail-note">Keep this receipt for your records. The clinic will update the status after confirming the payment.</p><dl><dt>Patient</dt><dd>{{ receipt.first_name }} {{ receipt.last_name }}</dd><dt>Service</dt><dd>{{ receipt.service_name }}</dd><dt>Appointment</dt><dd>{{ receipt.appt_date }} {{ receipt.appt_time }}</dd><dt>Payment plan</dt><dd>{{ receipt.payment_plan === 'downpayment' ? `${receipt.payment_percent}% downpayment` : 'Full payment' }}</dd><dt>Payment method</dt><dd>{{ receipt.method_name }}</dd><dt>Amount submitted</dt><dd>₱{{ Number(receipt.amount).toLocaleString('en-PH', { minimumFractionDigits: 2 }) }}</dd><dt>Reference</dt><dd>{{ receipt.reference_no || '—' }}</dd><dt>Paid at</dt><dd>{{ receipt.paid_at || 'Pending clinic verification' }}</dd></dl><img :src="qr" alt="Receipt QR code" width="180" height="180"><RouterLink class="button button-quiet" to="/patient/receipt">Back to receipts</RouterLink></article></div></template>
+<template>
+  <div class="receipt-page">
+    <section class="page-heading receipt-page-heading">
+      <div>
+        <p class="eyebrow">PAYMENTS &amp; RECORDS</p>
+        <h1>Payment Receipts</h1>
+        <p class="muted">View your submitted payments, verification status, and downloadable receipts.</p>
+      </div>
+      <button v-if="receipt" class="button button-primary" @click="exportPdf">Download PDF</button>
+    </section>
+
+    <SkeletonLoader v-if="loading" variant="receipt" label="Loading your payment receipts" />
+    <section v-else-if="error" class="surface empty-state">
+      <strong>Receipts unavailable</strong>
+      <p>{{ error }}</p>
+      <RouterLink to="/patient/payment">Go to payments</RouterLink>
+    </section>
+    <section v-else-if="!receipt" class="surface receipt-list-panel">
+      <div class="receipt-list-heading">
+        <div>
+          <p class="payment-step">PAYMENT HISTORY</p>
+          <h2>Your receipts</h2>
+          <p>Select a receipt to view the full details and download a PDF copy.</p>
+        </div>
+        <RouterLink class="button button-quiet" to="/patient/payment">Make a payment</RouterLink>
+      </div>
+      <div v-if="receipts.length" class="receipt-list">
+        <article v-for="item in receipts" :key="item.payment_id" class="receipt-list-item">
+          <div class="receipt-list-icon">₱</div>
+          <div class="receipt-list-main">
+            <strong>{{ item.receipt_no || `Payment #${item.payment_id}` }}</strong>
+            <p>{{ item.service_name }}</p>
+            <small>
+              Appointment: {{ item.appt_date }} {{ item.appt_time }} ·
+              {{ item.payment_plan === 'downpayment' ? `${item.payment_percent}% downpayment` : 'Full payment' }} ·
+              <b>₱{{ Number(item.amount).toLocaleString('en-PH', { minimumFractionDigits: 2 }) }}</b>
+            </small>
+          </div>
+          <span class="status-badge" :data-status="item.status">
+            {{ item.status === 'pending' ? 'Pending verification' : item.status }}
+          </span>
+          <RouterLink
+            class="receipt-view-link"
+            :to="{ path: '/patient/receipt', query: { id: item.payment_id } }"
+          >
+            View receipt <span aria-hidden="true">→</span>
+          </RouterLink>
+        </article>
+      </div>
+      <div v-else class="empty-state">
+        <strong>No payment receipts yet</strong>
+        <p>After you submit a payment, its receipt will appear here immediately.</p>
+        <RouterLink to="/patient/payment">Go to payments</RouterLink>
+      </div>
+    </section>
+    <article v-else class="surface receipt-card receipt-detail">
+      <div class="receipt-detail-header">
+        <div>
+          <p class="eyebrow">TOOTH DOCTOR · PAYMENT</p>
+          <h2>{{ receipt.receipt_no }}</h2>
+        </div>
+        <span class="status-badge" :data-status="receipt.status">
+          {{ receipt.status === 'pending' ? 'Pending clinic verification' : receipt.status }}
+        </span>
+      </div>
+      <p class="receipt-detail-note">Keep this receipt for your records. The clinic will update the status after confirming the payment.</p>
+      <dl>
+        <dt>Patient</dt><dd>{{ receipt.first_name }} {{ receipt.last_name }}</dd>
+        <dt>Service</dt><dd>{{ receipt.service_name }}</dd>
+        <dt>Appointment</dt><dd>{{ receipt.appt_date }} {{ receipt.appt_time }}</dd>
+        <dt>Payment plan</dt>
+        <dd>{{ receipt.payment_plan === 'downpayment' ? `${receipt.payment_percent}% downpayment` : 'Full payment' }}</dd>
+        <dt>Payment method</dt><dd>{{ receipt.method_name }}</dd>
+        <dt>Amount submitted</dt>
+        <dd>₱{{ Number(receipt.amount).toLocaleString('en-PH', { minimumFractionDigits: 2 }) }}</dd>
+        <dt>Reference</dt><dd>{{ receipt.reference_no || '—' }}</dd>
+        <dt>Paid at</dt><dd>{{ receipt.paid_at || 'Pending clinic verification' }}</dd>
+      </dl>
+      <img :src="qr" alt="Receipt QR code" width="180" height="180">
+      <RouterLink class="button button-quiet" to="/patient/receipt">Back to receipts</RouterLink>
+    </article>
+  </div>
+</template>
 
 <style scoped>
 .receipt-page {
@@ -266,7 +349,8 @@ onMounted(load); watch(() => route.query.id, load)
 }
 
 .receipt-detail {
-  max-width: 760px;
+  width: min(840px, 100%);
+  margin-inline: auto;
 }
 
 .receipt-detail-header {
@@ -324,6 +408,8 @@ onMounted(load); watch(() => route.query.id, load)
 }
 
 .receipt-detail img {
+  display: block;
+  max-width: 100%;
   margin: 0 0 24px;
   padding: 10px;
   border: 1px solid #e1ebe7;
@@ -339,6 +425,8 @@ onMounted(load); watch(() => route.query.id, load)
 
   .receipt-list-item {
     grid-template-columns: 40px minmax(0, 1fr);
+    gap: 10px 12px;
+    padding: 15px;
   }
 
   .receipt-list-icon {
@@ -352,48 +440,127 @@ onMounted(load); watch(() => route.query.id, load)
     justify-self: start;
   }
 
+  .receipt-list-main small {
+    display: block;
+    line-height: 1.6;
+  }
+
   .receipt-detail-header {
     align-items: flex-start;
     flex-direction: column;
   }
 }
 
-:global(:root[data-theme='dark']) .receipt-page-heading h1,
-:global(:root[data-theme='dark']) .receipt-list-heading h2,
-:global(:root[data-theme='dark']) .receipt-detail h2,
-:global(:root[data-theme='dark']) .receipt-list-main strong {
+@media (max-width: 480px) {
+  .receipt-detail dl {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .receipt-detail dt {
+    padding-bottom: 5px;
+    border-bottom: 0;
+  }
+
+  .receipt-detail dd {
+    padding-top: 5px;
+  }
+}
+
+:global(.app-shell[data-theme='dark'] .receipt-page-heading h1),
+:global(.app-shell[data-theme='dark'] .receipt-list-heading h2),
+:global(.app-shell[data-theme='dark'] .receipt-detail h2),
+:global(.app-shell[data-theme='dark'] .receipt-list-main strong) {
   color: #e5f0ea;
 }
 
-:global(:root[data-theme='dark']) .receipt-list-panel,
-:global(:root[data-theme='dark']) .receipt-detail,
-:global(:root[data-theme='dark']) .receipt-list-item {
+:global(.app-shell[data-theme='dark'] .receipt-page-heading .muted),
+:global(.app-shell[data-theme='dark'] .receipt-list-heading .payment-step),
+:global(.app-shell[data-theme='dark'] .receipt-detail-header .eyebrow) {
+  color: #b2c2bb;
+}
+
+:global(.app-shell[data-theme='dark'] .receipt-list-panel),
+:global(.app-shell[data-theme='dark'] .receipt-detail),
+:global(.app-shell[data-theme='dark'] .receipt-list-item) {
   border-color: #3a5047;
   background: #1d2b26;
 }
 
-:global(:root[data-theme='dark']) .receipt-list-heading,
-:global(:root[data-theme='dark']) .receipt-detail-header {
+:global(.app-shell[data-theme='dark'] .receipt-list-item:hover) {
+  border-color: #638e74;
+  box-shadow: 0 8px 22px rgb(0 0 0 / 18%);
+}
+
+:global(.app-shell[data-theme='dark'] .receipt-list-heading),
+:global(.app-shell[data-theme='dark'] .receipt-detail-header) {
   border-color: #40564c;
 }
 
-:global(:root[data-theme='dark']) .receipt-list-heading p:last-child,
-:global(:root[data-theme='dark']) .receipt-list-main small {
+:global(.app-shell[data-theme='dark'] .receipt-list-heading p:last-child),
+:global(.app-shell[data-theme='dark'] .receipt-list-main small) {
   color: #a7bdb0;
 }
 
-:global(:root[data-theme='dark']) .receipt-list-main p,
-:global(:root[data-theme='dark']) .receipt-detail dd {
+:global(.app-shell[data-theme='dark'] .receipt-list-main p),
+:global(.app-shell[data-theme='dark'] .receipt-list-main b),
+:global(.app-shell[data-theme='dark'] .receipt-detail dd) {
   color: #c9ded1;
 }
 
-:global(:root[data-theme='dark']) .receipt-detail dt {
+:global(.app-shell[data-theme='dark'] .receipt-list-icon) {
+  background: #294b36;
+  color: #a4e2ba;
+}
+
+:global(.app-shell[data-theme='dark'] .receipt-view-link) {
+  color: #9cdbb4;
+}
+
+:global(.app-shell[data-theme='dark'] .receipt-view-link:hover) {
+  color: #c0ebcf;
+}
+
+:global(.app-shell[data-theme='dark'] .receipt-detail-note) {
+  background: #263a32;
+  color: #c1d0c9;
+}
+
+:global(.app-shell[data-theme='dark'] .receipt-detail img) {
+  border-color: #40564c;
+  background: #fff;
+}
+
+:global(.app-shell[data-theme='dark'] .receipt-detail dt) {
   background: #243730;
   color: #a7bdb0;
 }
 
-:global(:root[data-theme='dark']) .receipt-detail dt,
-:global(:root[data-theme='dark']) .receipt-detail dd {
+:global(.app-shell[data-theme='dark'] .receipt-detail dt),
+:global(.app-shell[data-theme='dark'] .receipt-detail dd) {
   border-color: #40564c;
+}
+
+:global(.app-shell[data-theme='dark'] .receipt-list-item .status-badge[data-status='pending']) {
+  border: 1px solid #806b3e;
+  background: #403821;
+  color: #f0d48b;
+}
+
+:global(.app-shell[data-theme='dark'] .receipt-list-item .status-badge[data-status='verified']) {
+  border: 1px solid #426d55;
+  background: #244231;
+  color: #a4e2ba;
+}
+
+:global(.app-shell[data-theme='dark'] .receipt-list-item .status-badge[data-status='rejected']) {
+  border: 1px solid #754849;
+  background: #40272a;
+  color: #f0a6a6;
+}
+
+:global(.app-shell[data-theme='dark'] .receipt-page .button-quiet) {
+  border-color: #40534b;
+  background: #263630;
+  color: #d2dfd8;
 }
 </style>

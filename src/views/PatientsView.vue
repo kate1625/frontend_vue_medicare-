@@ -4,6 +4,8 @@ import { RouterLink, useRoute } from 'vue-router'
 import { ApiError, createPatient, deletePatient, getPatients, getPortalRole, updatePatient, type Patient, type PatientInput } from '../services/api'
 import UiIcon from '../components/UiIcon.vue'
 import ConfirmDialog from '../components/ConfirmDialog.vue'
+import SkeletonLoader from '../components/SkeletonLoader.vue'
+import { notify } from '../services/toast'
 
 const emptyForm = (): PatientInput => ({
   first_name: '',
@@ -98,9 +100,11 @@ async function savePatient() {
     if (editingId.value === null) {
       await createPatient(form.value)
       success.value = 'Patient record created.'
+      notify.success(success.value, 'Patient added')
     } else {
       await updatePatient(editingId.value, form.value)
       success.value = 'Patient record updated.'
+      notify.success(success.value, 'Patient updated')
     }
     formOpen.value = false
     await loadPatients()
@@ -111,6 +115,7 @@ async function savePatient() {
     } else {
       error.value = 'Could not save the patient record.'
     }
+    notify.error(error.value, 'Patient record not saved')
   } finally {
     saving.value = false
   }
@@ -129,9 +134,11 @@ async function confirmArchivePatient() {
   try {
     await deletePatient(patient.id)
     success.value = 'Patient record archived.'
+    notify.success(success.value, 'Patient archived')
     await loadPatients()
   } catch (cause) {
     error.value = cause instanceof ApiError ? cause.message : 'Could not delete the patient record.'
+    notify.error(error.value, 'Patient record not archived')
   }
 }
 
@@ -159,7 +166,6 @@ onMounted(() => {
   </section>
 
   <div v-if="error && !formOpen" class="alert alert-error" role="alert">{{ error }}</div>
-  <div v-if="success" class="alert alert-success" role="status">{{ success }}</div>
 
   <section class="surface directory-panel">
     <div class="directory-toolbar">
@@ -170,7 +176,7 @@ onMounted(() => {
       <span class="result-count">{{ filteredPatients.length }} {{ filteredPatients.length === 1 ? 'record' : 'records' }}</span>
     </div>
 
-    <div v-if="loading" class="empty-state">Loading patient records…</div>
+    <SkeletonLoader v-if="loading" variant="table" :rows="5" :columns="5" :contained="true" label="Loading patient records" />
     <div v-else-if="!patients.length && !error" class="empty-state">
       <span class="empty-icon"><UiIcon name="users-round" /></span>
       <strong>No patient records yet</strong>

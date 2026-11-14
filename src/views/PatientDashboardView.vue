@@ -2,6 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { getApiData } from '../services/api'
 import UiIcon from '../components/UiIcon.vue'
+import SkeletonLoader from '../components/SkeletonLoader.vue'
 
 let ChartConstructor: typeof import('chart.js').Chart | undefined
 async function loadChart() {
@@ -155,8 +156,8 @@ onBeforeUnmount(() => {
 </script>
 <template>
   <div class="dashboard-page">
-  <section class="page-heading"><div><p class="eyebrow">PAGE 06 · PATIENT</p><h1>Welcome{{ data ? `, ${data.patient.first_name}` : '' }}</h1><p class="muted">Your upcoming appointments, payments, and dental care updates.</p></div><RouterLink class="button button-primary" to="/patient/book">Book appointment <UiIcon name="arrow-right" /></RouterLink></section>
-  <section v-if="loading" class="surface empty-state"><span class="loading-dot"/><strong>Loading your dashboard</strong></section>
+  <section class="page-heading"><div><p class="eyebrow"></p><h1>Welcome{{ data ? `, ${data.patient.first_name}` : '' }}</h1><p class="muted">Your upcoming appointments, payments, and dental care updates.</p></div><RouterLink class="button button-primary" to="/patient/book">Book appointment <UiIcon name="arrow-right" /></RouterLink></section>
+  <SkeletonLoader v-if="loading" variant="patient-dashboard" label="Loading your dashboard" />
   <section v-else-if="error" class="surface empty-state"><strong>Dashboard unavailable</strong><p>{{ error }}</p><button class="button button-quiet" type="button" @click="loadDashboard">Try again</button></section>
   <template v-else-if="data">
     <section class="dashboard-shortcuts" aria-label="Patient quick actions">
@@ -185,5 +186,109 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
+.dashboard-page :deep(.stat-icon-green),
+.dashboard-page :deep(.stat-icon-blue),
+.dashboard-page :deep(.stat-icon-amber) {
+  background: #e7f5ee;
+  color: #379a6b;
+}
+
+:global(.app-shell[data-theme='dark'] .dashboard-page .stat-icon-green),
+:global(.app-shell[data-theme='dark'] .dashboard-page .stat-icon-blue),
+:global(.app-shell[data-theme='dark'] .dashboard-page .stat-icon-amber) {
+  background: #294b3b;
+  color: #a4e2ba;
+}
+
 .patient-summary{grid-template-columns:repeat(4,minmax(0,1fr));margin:0 0 18px}.patient-summary .stat-card{min-height:126px}.balance-number{font-size:23.8px!important}.patient-upcoming{padding:0 21px 8px}.patient-upcoming .section-heading,.patient-activity .section-heading{padding:19px 0 13px}.patient-upcoming .section-heading h2,.patient-activity .section-heading h2{margin:0;font-size:16.2px}.patient-upcoming .section-heading p,.patient-activity .section-heading p{margin:3px 0 0;font-size:11.9px}.appointment-card{align-items:center}.visit-date{display:grid;width:42px;height:46px;flex:none;place-content:center;border-radius:12px;background:#edf8f2;color:#367d60;text-align:center}.visit-date strong{font-size:18.4px;line-height:1}.visit-date small{font-size:9.7px;text-transform:uppercase}.visit-detail{flex:1}.patient-lower-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:17px;margin:18px 0}.patient-lower-grid>.surface{min-width:0}.patient-activity{padding:0 20px 15px}.activity-list{display:grid}.activity-list article{display:flex;gap:11px;padding:12px 0;border-top:1px solid #edf0f4}.activity-dot{width:8px;height:8px;flex:none;margin-top:5px;border-radius:50%;background:#65ad8b;box-shadow:0 0 0 4px #e9f6ee}.activity-treatment{background:#8c7abc;box-shadow:0 0 0 4px #f0edfa}.activity-payment{background:#d3a24e;box-shadow:0 0 0 4px #fcf4e7}.activity-list strong{color:#42576d;font-size:11.9px;font-weight:650}.activity-list p{margin:3px 0 0;color:#909bad;font-size:10.8px}.dashboard-chart h2{margin:0 0 5px;font-size:16.2px}.dashboard-chart>.muted{font-size:11.9px}@media(max-width:900px){.patient-summary{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:650px){.patient-lower-grid{grid-template-columns:1fr}.patient-summary{gap:10px}.patient-summary .stat-card{min-height:112px;padding:15px}.balance-number{font-size:20.5px!important}.patient-upcoming{padding:0 14px 7px}.patient-upcoming .section-heading{gap:10px}.visit-detail p{font-size:10.8px}}
+
+@media (max-width: 650px) {
+  .dashboard-shortcuts .dashboard-shortcut > .stat-icon {
+    position: static;
+    inset: auto;
+    flex: 0 0 32px;
+  }
+
+  .dashboard-shortcuts .dashboard-shortcut {
+    gap: 10px;
+    padding: 12px;
+  }
+
+  .dashboard-page .patient-summary .stat-card {
+    display: grid;
+    grid-template-columns: 32px minmax(0, 1fr);
+    align-content: center;
+    gap: 4px 9px;
+    min-height: 112px;
+    padding: 13px;
+  }
+
+  .dashboard-page .patient-summary .stat-card > .stat-icon {
+    position: static;
+    grid-column: 1;
+    grid-row: 1 / span 3;
+    align-self: start;
+    inset: auto;
+  }
+
+  .dashboard-page .patient-summary .stat-card > p,
+  .dashboard-page .patient-summary .stat-card > strong,
+  .dashboard-page .patient-summary .stat-card > small {
+    grid-column: 2;
+    min-width: 0;
+  }
+
+  .dashboard-page .patient-summary .stat-card > p {
+    margin: 0;
+    line-height: 1.35;
+  }
+
+  .dashboard-page .patient-summary .stat-card > strong {
+    overflow-wrap: anywhere;
+    font-size: 20px;
+  }
+
+  .dashboard-page .patient-summary .stat-card > small {
+    line-height: 1.4;
+  }
+
+  .patient-upcoming .section-heading {
+    align-items: flex-start;
+  }
+
+  .patient-upcoming .section-heading > div {
+    min-width: 0;
+  }
+
+  .patient-upcoming .section-heading .text-link {
+    flex: 0 0 auto;
+    white-space: nowrap;
+  }
+}
+
+@media (max-width: 380px) {
+  .dashboard-page .page-heading h1 {
+    font-size: 23px;
+  }
+
+  .dashboard-page .patient-summary .stat-card {
+    grid-template-columns: 27px minmax(0, 1fr);
+    gap: 4px 7px;
+    padding: 11px;
+  }
+
+  .dashboard-page .patient-summary .stat-card > .stat-icon {
+    width: 27px;
+    height: 27px;
+    font-size: 16px;
+  }
+
+  .dashboard-page .patient-summary .stat-card > strong {
+    font-size: 18px;
+  }
+
+  .patient-upcoming .section-heading {
+    flex-direction: column;
+  }
+}
 </style>

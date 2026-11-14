@@ -7,7 +7,9 @@ import timeGridPlugin from '@fullcalendar/timegrid'
 import interactionPlugin from '@fullcalendar/interaction'
 import { ApiError, apiRequest, getApiData, getPortalRole } from '../services/api'
 import UiIcon from '../components/UiIcon.vue'
+import { notify } from '../services/toast'
 import ConfirmDialog from '../components/ConfirmDialog.vue'
+import SkeletonLoader from '../components/SkeletonLoader.vue'
 
 interface Appointment {
   appointment_id: number
@@ -117,8 +119,9 @@ async function createStaffBooking() {
     showStaffBooking.value = false
     staffBooking.value = {patient_id:0,service_id:0,dentist_id:0,appt_date:'',appt_time:''}
     success.value = 'Appointment confirmed and added to the clinic schedule.'
+    notify.success(success.value, 'Appointment booked')
     await loadAppointments()
-  } catch (cause) { error.value = cause instanceof ApiError ? cause.message : 'Could not book the appointment.' }
+  } catch (cause) { error.value = cause instanceof ApiError ? cause.message : 'Could not book the appointment.'; notify.error(error.value, 'Appointment not booked') }
   finally { busyId.value = null }
 }
 async function loadStaffSlots() {
@@ -233,12 +236,14 @@ async function rescheduleFromDetails() {
   try {
     await apiRequest(`/api/appointments/${item.appointment_id}/reschedule`, { method: 'POST', body: JSON.stringify({ appt_date: detailRescheduleForm.value.date, appt_time: detailRescheduleForm.value.time, reschedule_reason: detailRescheduleForm.value.reason }) })
     success.value = 'Appointment rescheduled. A confirmation email was sent to the patient.'
+    notify.success(success.value, 'Appointment rescheduled')
     detailRescheduleForm.value = { date: '', time: '', reason: '' }; detailSlots.value = []
     await loadAppointments()
     detailAppointment.value = appointments.value.find((appointment) => appointment.appointment_id === item.appointment_id) ?? item
     detailHistory.value = await getApiData<HistoryEntry[]>(`/api/appointments/${item.appointment_id}/history`)
   } catch (cause) {
     error.value = cause instanceof ApiError ? cause.message : 'Could not reschedule the appointment.'
+    notify.error(error.value, 'Rescheduling failed')
   } finally { detailRescheduling.value = false }
 }
 
@@ -249,8 +254,10 @@ async function emailFromDetails() {
   try {
     const result = await apiRequest<{ message: string }>(`/api/appointments/${item.appointment_id}/email`, { method: 'POST' })
     success.value = result.message
+    notify.success(success.value, 'Email sent')
   } catch (cause) {
     error.value = cause instanceof ApiError ? cause.message : 'Could not send the appointment email.'
+    notify.error(error.value, 'Email not sent')
   } finally { detailNotifying.value = false }
 }
 
@@ -281,9 +288,11 @@ async function verifyPayment(item: Appointment) {
       })
     }
     success.value = 'Payment verified. The patient confirmation email was sent through Brevo.'
+    notify.success(success.value, 'Payment verified')
     await loadAppointments()
   } catch (cause) {
     error.value = cause instanceof ApiError ? cause.message : 'Could not verify this payment.'
+    notify.error(error.value, 'Payment verification failed')
   } finally {
     verifyingPaymentId.value = null
   }
@@ -304,7 +313,7 @@ function initializeCalendar() {
       if (count > 0) {
         const badge = document.createElement('span')
         badge.className = 'calendar-appointment-count'
-        badge.innerHTML = `<span aria-hidden="true">●</span> ${count} ${count === 1 ? 'appointment' : 'appointments'}`
+        badge.innerHTML = `<span class="calendar-appointment-count-dot" aria-hidden="true">●</span><span class="calendar-appointment-count-full">${count} ${count === 1 ? 'appointment' : 'appointments'}</span><span class="calendar-appointment-count-short">${count} appt</span>`
         badge.title = `${count} ${count === 1 ? 'appointment' : 'appointments'} scheduled`
         info.el.querySelector('.fc-daygrid-day-top')?.appendChild(badge)
       }
@@ -320,10 +329,12 @@ function initializeCalendar() {
       try {
         await apiRequest(`/api/appointments/${info.event.id}/reschedule`, { method: 'POST', body: JSON.stringify({ appt_date: apptDate, appt_time: apptTime }) })
         success.value = 'Appointment rescheduled.'
+        notify.success(success.value, 'Appointment rescheduled')
         await loadAppointments()
       } catch (cause) {
         info.revert()
         error.value = cause instanceof ApiError ? cause.message : 'Could not reschedule appointment.'
+        notify.error(error.value, 'Rescheduling failed')
       }
     },
   })
@@ -348,9 +359,10 @@ async function confirmCancellation(reason: string) {
   try {
     await apiRequest(`/api/appointments/${item.appointment_id}/cancel`, { method: 'POST', body: JSON.stringify({ cancel_reason: reason }) })
     success.value = 'Appointment cancelled.'
+    notify.success(success.value, 'Appointment cancelled')
     await loadAppointments()
     cancelTarget.value = null
-  } catch (cause) { error.value = cause instanceof ApiError ? cause.message : 'Could not cancel the appointment.' }
+  } catch (cause) { error.value = cause instanceof ApiError ? cause.message : 'Could not cancel the appointment.'; notify.error(error.value, 'Cancellation failed') }
   finally { busyId.value = null }
 }
 
@@ -361,12 +373,13 @@ async function updateStatus(item: Appointment, status: string) {
   try {
     await apiRequest(`/api/appointments/${item.appointment_id}/status`, { method: 'POST', body: JSON.stringify({ status }) })
     success.value = `Appointment marked ${status.replace('_', ' ')}.`
+    notify.success(success.value, 'Appointment updated')
     await loadAppointments()
     if (detailAppointment.value?.appointment_id === item.appointment_id) {
       detailAppointment.value = appointments.value.find((appointment) => appointment.appointment_id === item.appointment_id) ?? detailAppointment.value
       detailHistory.value = await getApiData<HistoryEntry[]>(`/api/appointments/${item.appointment_id}/history`)
     }
-  } catch (cause) { error.value = cause instanceof ApiError ? cause.message : 'Could not update appointment status.' }
+  } catch (cause) { error.value = cause instanceof ApiError ? cause.message : 'Could not update appointment status.'; notify.error(error.value, 'Appointment update failed') }
   finally { busyId.value = null }
 }
 
@@ -403,13 +416,12 @@ onBeforeUnmount(() => { calendar?.destroy(); calendar = null })
 
 <template>
   <section class="page-heading">
-    <div><p class="eyebrow">PAGE {{ String(props.pageNumber).padStart(2, '0') }}</p><h1>{{ props.pageNumber === 14 ? 'Appointment Management' : 'My Appointments' }}</h1><p class="muted">Appointments loaded from the clinic database.</p></div>
+    <div><p class="eyebrow"> </p><h1>{{ props.pageNumber === 14 ? 'Appointment Management' : 'My Appointments' }}</h1><p class="muted">Appointments loaded from the clinic database.</p></div>
     <RouterLink v-if="isPatient" to="/patient/book" class="button button-primary">Book appointment</RouterLink>
     <button v-else class="button button-primary" type="button" @click="showStaffBooking=!showStaffBooking"><UiIcon name="plus" /> Add appointment</button>
   </section>
   <section v-if="showStaffBooking" class="surface staff-booking"><h2>Book for a patient</h2><form class="booking-grid" @submit.prevent="createStaffBooking"><label>Patient<select v-model.number="staffBooking.patient_id" required><option :value="0" disabled>Choose a patient</option><option v-for="p in staffPatients" :key="p.id" :value="p.id">{{p.first_name}} {{p.last_name}}</option></select></label><label>Service<select v-model.number="staffBooking.service_id" required><option :value="0" disabled>Choose a service</option><option v-for="s in staffCatalog?.services||[]" :key="s.service_id" :value="s.service_id">{{s.service_name}}</option></select></label><label>Dentist<select v-model.number="staffBooking.dentist_id" required><option :value="0" disabled>Choose a dentist</option><option v-for="d in staffCatalog?.dentists||[]" :key="d.dentist_id" :value="d.dentist_id">{{d.display_name}}</option></select></label><label>Date<input v-model="staffBooking.appt_date" type="date" :min="localToday()" required></label><label>Available time<select v-model="staffBooking.appt_time" required :disabled="staffSlotsLoading||!staffSlots.length"><option value="" disabled>{{staffSlotsLoading?'Checking schedule…':staffSlots.length?'Choose an open time':'Choose a dentist, service, and date first'}}</option><option v-for="slot in staffSlots" :key="slot" :value="slot">{{slot}}</option></select></label><div class="booking-actions"><button class="button button-primary" :disabled="busyId===-1||!staffBooking.appt_time">Confirm booking</button><button class="button button-quiet" type="button" @click="showStaffBooking=false">Close</button></div></form></section>
   <div v-if="error" class="alert alert-error" role="alert">{{ error }} <button class="text-button" type="button" @click="loadAppointments">Retry</button></div>
-  <div v-if="success" class="alert alert-success" role="status">{{ success }}</div>
   <div v-if="isPatient && todayAppointments.length" class="alert alert-info appointment-day-reminder" role="status">
     <UiIcon name="bell" />
     <span><strong>Appointment reminder:</strong> you have {{ todayAppointments.length }} appointment{{ todayAppointments.length === 1 ? '' : 's' }} today. Please arrive a little early.</span>
@@ -434,20 +446,20 @@ onBeforeUnmount(() => { calendar?.destroy(); calendar = null })
       <select v-model="statusFilter" class="filter-select" aria-label="Filter appointments by status"><option value="all">All statuses</option><option value="pending">Pending</option><option value="confirmed">Confirmed</option><option value="completed">Completed</option><option value="cancelled">Cancelled</option><option value="no_show">No-show</option></select>
       <span class="result-count">{{ visible.length }} {{ requestedDateFilter === 'today' ? 'today' : requestedDateFilter === 'yesterday' ? 'yesterday' : requestedDateFilter === 'last7' ? 'recent' : '' }} records</span>
     </div>
-    <div v-if="loading" class="empty-state">Loading appointments…</div>
+    <SkeletonLoader v-if="loading" variant="table" :rows="5" :columns="8" :contained="true" label="Loading appointments" />
     <div v-else-if="!visible.length" class="empty-state"><strong>No appointments found</strong><p>Try a different search or status filter.</p></div>
     <div v-else class="table-wrap">
-      <table class="data-table">
+      <table class="data-table appointment-table">
         <thead><tr><th>Appointment</th><th>Date &amp; time</th><th v-if="isPatient">Submitted</th><th>Service</th><th v-if="!isPatient">Patient</th><th>Dentist</th><th>Payment</th><th>Status</th><th>Actions</th></tr></thead>
         <tbody>
           <tr v-for="item in visible" :key="item.appointment_id">
-            <td><RouterLink v-if="!isPatient" class="patient-name" :to="`/staff/appointments/${item.appointment_id}`">#{{ item.appointment_id }}</RouterLink><span v-else>#{{ item.appointment_id }}</span><small v-if="!isPatient" class="table-secondary">{{ item.patient || `Patient #${item.patient_id}` }}</small><small class="table-secondary">{{ money(item.price) }}</small><small v-if="!isPatient" class="table-secondary">Requested {{ formatSubmittedDate(item.created_at) }}</small></td>
-            <td>{{ item.appt_date }}<small class="table-secondary">{{ item.appt_time }}</small></td>
-            <td v-if="isPatient">{{ formatSubmittedDate(item.created_at) }}</td>
-            <td>{{ item.service_name }}</td><td v-if="!isPatient"><strong>{{ item.patient || `Patient #${item.patient_id}` }}</strong><small class="table-secondary">#{{ item.patient_id }}</small></td><td>{{ item.dentist || 'Unassigned' }}</td>
-            <td>{{ item.payment_status || 'Unpaid' }}</td>
-            <td><span class="status-badge" :class="`status-${item.status}`">{{ item.status.replace('_', ' ') }}</span></td>
-            <td class="actions-cell">
+            <td data-label="Appointment"><RouterLink v-if="!isPatient" class="patient-name" :to="`/staff/appointments/${item.appointment_id}`">#{{ item.appointment_id }}</RouterLink><span v-else>#{{ item.appointment_id }}</span><small v-if="!isPatient" class="table-secondary">{{ item.patient || `Patient #${item.patient_id}` }}</small><small class="table-secondary">{{ money(item.price) }}</small><small v-if="!isPatient" class="table-secondary">Requested {{ formatSubmittedDate(item.created_at) }}</small></td>
+            <td data-label="Date & time">{{ item.appt_date }}<small class="table-secondary">{{ item.appt_time }}</small></td>
+            <td v-if="isPatient" data-label="Submitted">{{ formatSubmittedDate(item.created_at) }}</td>
+            <td data-label="Service">{{ item.service_name }}</td><td v-if="!isPatient" data-label="Patient"><strong>{{ item.patient || `Patient #${item.patient_id}` }}</strong><small class="table-secondary">#{{ item.patient_id }}</small></td><td data-label="Dentist">{{ item.dentist || 'Unassigned' }}</td>
+            <td data-label="Payment">{{ item.payment_status || 'Unpaid' }}</td>
+            <td data-label="Status"><span class="status-badge" :class="`status-${item.status}`">{{ item.status.replace('_', ' ') }}</span></td>
+            <td class="actions-cell" data-label="Actions">
               <button v-if="!isPatient" class="row-action" type="button" @click="openAppointmentDetails(item)">Details</button>
               <button v-if="isPatient && ['pending','confirmed'].includes(item.status)" class="row-action row-action-danger" type="button" :disabled="busyId === item.appointment_id" :title="canCancel(item) ? 'Cancel appointment' : 'Past appointments cannot be cancelled'" @click="cancelAppointment(item)">Cancel</button>
               <template v-else-if="!isPatient && item.status === 'pending'">
@@ -570,7 +582,257 @@ onBeforeUnmount(() => { calendar?.destroy(); calendar = null })
 
 <style scoped>
 .staff-booking{margin:-10px 0 20px;padding:20px}.staff-booking h2{margin:0 0 14px}.booking-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}.booking-grid label{display:grid;gap:6px;color:#718793;font-size:13px;font-weight:650}.booking-grid input,.booking-grid select{min-height:40px;border:1px solid #dce8e8;border-radius:10px;padding:9px;background:#fff;color:#26364a}.booking-actions{display:flex;align-items:end;gap:8px}.appointment-day-reminder{display:flex;align-items:center;gap:9px}.appointment-day-reminder svg{flex:none;color:#2c8667}.button-spinner{display:inline-block;width:12px;height:12px;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;animation:spin .7s linear infinite}.quick-date-filter{display:flex;gap:4px;padding:3px;border:1px solid var(--line);border-radius:10px;background:var(--surface)}.quick-date-filter button{border:0;border-radius:7px;padding:7px 10px;background:transparent;color:var(--muted);font-size:12px;font-weight:700;cursor:pointer}.quick-date-filter button.active{background:var(--soft-teal);color:var(--teal-dark)}.appointment-details-modal{width:min(760px,100%);max-height:90vh;overflow:auto}.detail-popup-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;padding:17px;border:1px solid var(--line);border-radius:14px;background:var(--surface)}.detail-popup-grid dt{color:var(--muted);font-size:11px;font-weight:700}.detail-popup-grid dd{margin:4px 0 0;color:var(--ink);font-size:14px;font-weight:650}.detail-popup-wide{grid-column:1 / -1}.history-popup,.popup-reschedule{margin-top:16px;padding:17px;border:1px solid var(--line);border-radius:14px;background:var(--surface)}.history-popup h3,.popup-reschedule h3{margin:4px 0 0;font-size:16px}.popup-section-heading,.history-heading{display:flex;align-items:center;justify-content:space-between;gap:12px}.popup-section-note{color:var(--muted);font-size:11px;font-weight:700}.popup-reschedule-form{display:grid;grid-template-columns:1fr 1fr auto;align-items:end;gap:10px;margin-top:14px}.popup-reschedule-form label{display:grid;gap:5px;color:var(--muted);font-size:11px;font-weight:700}.popup-reschedule-form input,.popup-reschedule-form select{min-height:40px;border:1px solid var(--line);border-radius:9px;padding:8px 10px;background:var(--surface);color:var(--ink)}.popup-reason-field{grid-column:1 / -1}.calendar-details-link{padding:0;border:0;background:transparent;color:var(--teal-dark);font:inherit;font-weight:700;text-align:left;cursor:pointer}@media(max-width:760px){.booking-grid{grid-template-columns:1fr 1fr}.detail-popup-grid,.popup-reschedule-form{grid-template-columns:1fr}.popup-reschedule-form .button{width:100%}.popup-reason-field{grid-column:auto}}@media(max-width:460px){.booking-grid{grid-template-columns:1fr}}
-.calendar-summary{display:flex;align-items:center;gap:8px;margin-bottom:12px;padding:9px 12px;border:1px solid #dce8e3;border-radius:9px;background:#f7fbf9;color:#6b8085;font-size:11px}.calendar-summary strong{color:#2c6253;font-size:11.5px}.calendar-summary-dot{width:8px;height:8px;border-radius:50%;background:#3a9b70;box-shadow:0 0 0 3px #dcefe4}.calendar-appointment-count{display:flex;align-items:center;width:max-content;max-width:calc(100% - 8px);margin:4px 4px 0;padding:4px 7px;border:1px solid #acd9be;border-radius:999px;background:#e4f4eb;color:#28775b;font-size:10px;font-weight:800;line-height:1.1;white-space:nowrap}.calendar-appointment-count span{margin-right:3px;color:#3a9b70;font-size:8px}.calendar-day-modal{width:min(760px,100%)}.calendar-day-list{display:grid;gap:10px;max-height:58vh;overflow:auto}.calendar-day-item{display:grid;grid-template-columns:80px minmax(0,1fr) auto;align-items:center;gap:14px;padding:14px;border:1px solid #dce8e3;border-radius:12px;background:#fbfdfc}.calendar-day-time{color:#26745c;font-size:14px;font-weight:800}.calendar-day-time small{display:block;color:#71858a;font-size:10px;font-weight:500}.calendar-day-info{display:grid;gap:4px;min-width:0}.calendar-day-info .patient-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.calendar-day-info span{color:#71858a;font-size:11px}.calendar-day-status{display:grid;justify-items:end;gap:6px}.payment-status{font-size:10.5px;font-weight:700}.calendar-payment-detail,.calendar-payment-reference{color:#71858a;font-size:10px;text-align:right}.calendar-verify-button{padding:6px 8px;border:1px solid #afd8bf;border-radius:7px;background:#e4f4eb;color:#28775b;font-size:10px;font-weight:750;cursor:pointer}.calendar-verify-button:disabled{cursor:wait;opacity:.65}.payment-verified{color:#28775b}.payment-pending{color:#a46d1f}.payment-rejected{color:#b44d53}.payment-unpaid{color:#71858a}
-:global(:root[data-theme='dark']) .calendar-summary{border-color:#3b5148;background:#202f29;color:#a9bdb3}:global(:root[data-theme='dark']) .calendar-summary strong{color:#c4e0d1}:global(:root[data-theme='dark']) .calendar-appointment-count{border-color:#426d55;background:#244231;color:#a9e0bc}:global(:root[data-theme='dark']) .calendar-day-item{border-color:#3b5148;background:#202f29}:global(:root[data-theme='dark']) .calendar-payment-detail,:global(:root[data-theme='dark']) .calendar-payment-reference{color:#a9bdb3}:global(:root[data-theme='dark']) .calendar-verify-button{border-color:#426d55;background:#244231;color:#a9e0bc}.calendar-day-info span,:global(:root[data-theme='dark']) .calendar-day-info span{color:#a9bdb3}
+:global(.calendar-summary) { display: grid; grid-template-columns: 9px minmax(0, 1fr); align-items: center; gap: 3px 9px; margin-bottom: 14px; padding: 11px 13px; border: 1px solid #dce8e3; border-radius: 11px; background: #f7fbf9; color: #6b8085; font-size: 11px; line-height: 1.45; }
+:global(.calendar-summary strong) { color: #2c6253; font-size: 12px; }
+:global(.calendar-summary > span:last-child) { grid-column: 2; }
+:global(.calendar-summary-dot) { grid-row: 1 / span 2; width: 8px; height: 8px; align-self: start; margin-top: 4px; border-radius: 50%; background: #3a9b70; box-shadow: 0 0 0 3px #dcefe4; }
+:global(.calendar-panel .fc .fc-toolbar) { align-items: center; margin-bottom: 12px; }
+:global(.calendar-panel .fc .fc-toolbar-chunk) { gap: 5px; }
+:global(.calendar-panel .fc .fc-toolbar-title) { color: #234454; font-size: 17px; font-weight: 750; }
+:global(.calendar-panel .fc .fc-button) { min-height: 34px; border-radius: 8px; font-size: 11px; font-weight: 700; box-shadow: none; }
+:global(.calendar-panel .fc .fc-button-primary) { border-color: #3a9478; background: #3a9478; }
+:global(.calendar-panel .fc .fc-button-primary:hover),
+:global(.calendar-panel .fc .fc-button-primary:focus) { border-color: #28765e; background: #28765e; }
+:global(.calendar-panel .fc .fc-button-primary:disabled) { border-color: #dce8e3; background: #eef4f1; color: #748780; opacity: 1; }
+:global(.calendar-panel .fc .fc-col-header-cell) { background: #f6faf8; }
+:global(.calendar-panel .fc .fc-col-header-cell-cushion) { padding: 8px 3px; color: #60766d; font-size: 10px; font-weight: 750; text-decoration: none; }
+:global(.calendar-panel .fc .fc-daygrid-day-number) { margin: 0; padding: 4px 5px; color: #526a60; font-size: 11px; text-decoration: none; }
+:global(.calendar-panel .fc .fc-daygrid-day-top) { position: relative; min-height: 43px; align-items: flex-start; padding: 2px 3px 0; }
+:global(.calendar-panel .fc .fc-daygrid-day-frame) { min-height: 74px; }
+:global(.calendar-panel .fc .fc-day-other .fc-daygrid-day-number) { color: #a7b3ae; }
+:global(.calendar-panel .fc .fc-day-today) { background: #edf7f1; }
+:global(.calendar-appointment-count) { position: absolute; top: 23px; left: 3px; display: flex; align-items: center; width: fit-content; max-width: calc(100% - 6px); min-width: 0; margin: 0; padding: 3px 5px; overflow: hidden; border: 1px solid #acd9be; border-radius: 999px; background: #e4f4eb; color: #28775b; font-size: 9px; font-weight: 800; line-height: 1.1; text-overflow: ellipsis; white-space: nowrap; }
+:global(.calendar-appointment-count-dot) { flex: none; margin-right: 3px; color: #3a9b70; font-size: 8px; }
+:global(.calendar-appointment-count-short) { display: none; }
+.calendar-day-modal { width: min(760px, 100%); }
+.calendar-day-list { display: grid; gap: 10px; max-height: 58vh; overflow: auto; }
+.calendar-day-item { display: grid; grid-template-columns: 80px minmax(0, 1fr) auto; align-items: center; gap: 14px; padding: 14px; border: 1px solid #dce8e3; border-radius: 12px; background: #fbfdfc; }
+.calendar-day-time { color: #26745c; font-size: 14px; font-weight: 800; }
+.calendar-day-time small { display: block; color: #71858a; font-size: 10px; font-weight: 500; }
+.calendar-day-info { display: grid; gap: 4px; min-width: 0; }
+.calendar-day-info .patient-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.calendar-day-info span { color: #71858a; font-size: 11px; }
+.calendar-day-status { display: grid; justify-items: end; gap: 6px; }
+.payment-status { font-size: 10.5px; font-weight: 700; }
+.calendar-payment-detail,
+.calendar-payment-reference { color: #71858a; font-size: 10px; text-align: right; }
+.calendar-verify-button { padding: 6px 8px; border: 1px solid #afd8bf; border-radius: 7px; background: #e4f4eb; color: #28775b; font-size: 10px; font-weight: 750; cursor: pointer; }
+.calendar-verify-button:disabled { cursor: wait; opacity: .65; }
+.payment-verified { color: #28775b; }
+.payment-pending { color: #a46d1f; }
+.payment-rejected { color: #b44d53; }
+.payment-unpaid { color: #71858a; }
+
+:global(.app-shell[data-theme='dark'] .calendar-summary) { border-color: #3b5148; background: #202f29; color: #bdccc4; }
+:global(.app-shell[data-theme='dark'] .calendar-summary strong) { color: #e0ece5; }
+:global(.app-shell[data-theme='dark'] .calendar-summary-dot) { background: #70c697; box-shadow: 0 0 0 3px #294637; }
+:global(.app-shell[data-theme='dark'] .calendar-appointment-count) { border-color: #56876a; background: #294b36; color: #e2f5e7; }
+:global(.app-shell[data-theme='dark'] .calendar-appointment-count-dot) { color: #a4e2ba; }
+:global(.app-shell[data-theme='dark'] .calendar-panel .fc) { color: #d2dfd8; }
+:global(.app-shell[data-theme='dark'] .calendar-panel .fc .fc-toolbar-title) { color: #e7f0eb; }
+:global(.app-shell[data-theme='dark'] .calendar-panel .fc .fc-col-header-cell) { background: #24352e; }
+:global(.app-shell[data-theme='dark'] .calendar-panel .fc .fc-col-header-cell-cushion) { color: #b7c9bf; }
+:global(.app-shell[data-theme='dark'] .calendar-panel .fc .fc-daygrid-day-number) { color: #d3e0d9; }
+:global(.app-shell[data-theme='dark'] .calendar-panel .fc .fc-day-other .fc-daygrid-day-number) { color: #71847a; }
+:global(.app-shell[data-theme='dark'] .calendar-panel .fc .fc-day-today) { background: #2b4037; }
+:global(.app-shell[data-theme='dark'] .calendar-panel .fc .fc-button-primary:disabled) { border-color: #3b5148; background: #263630; color: #a8b9b1; }
+:global(.app-shell[data-theme='dark'] .quick-date-filter) { border-color: #3b5148; background: #202f29; }
+:global(.app-shell[data-theme='dark'] .quick-date-filter button) { color: #b2c2bb; }
+:global(.app-shell[data-theme='dark'] .quick-date-filter button:hover),
+:global(.app-shell[data-theme='dark'] .quick-date-filter button:focus-visible) {
+  outline-color: #8bd4a8;
+  background: #293d34;
+  color: #e4ede9;
+}
+:global(.app-shell[data-theme='dark'] .quick-date-filter button.active) {
+  background: #35684d;
+  color: #e5f7ea;
+  box-shadow: inset 0 0 0 1px #5e9c72;
+}
+:global(.app-shell[data-theme='dark'] .calendar-day-modal) { border-color: #40534b; background: #1d2b26; color: #e4ede9; }
+:global(.app-shell[data-theme='dark'] .calendar-day-modal .modal-heading h2) { color: #f0f5f2; }
+:global(.app-shell[data-theme='dark'] .calendar-day-modal .modal-heading .eyebrow) { color: #9cdbb4; }
+:global(.app-shell[data-theme='dark'] .calendar-day-modal .modal-heading .muted) { color: #b2c2bb; }
+:global(.app-shell[data-theme='dark'] .calendar-day-modal .text-button) { color: #9cdbb4; }
+:global(.app-shell[data-theme='dark'] .calendar-day-item) { border-color: #40534b; background: #263630; }
+:global(.app-shell[data-theme='dark'] .calendar-day-time) { color: #9cdbb4; }
+:global(.app-shell[data-theme='dark'] .calendar-day-time small),
+:global(.app-shell[data-theme='dark'] .calendar-day-info span),
+:global(.app-shell[data-theme='dark'] .calendar-submitted-date) { color: #b2c2bb; }
+:global(.app-shell[data-theme='dark'] .calendar-day-info .patient-name) { color: #e4ede9; }
+:global(.app-shell[data-theme='dark'] .calendar-details-link) { color: #9cdbb4; }
+:global(.app-shell[data-theme='dark'] .calendar-payment-detail),
+:global(.app-shell[data-theme='dark'] .calendar-payment-reference) { color: #b2c2bb; }
+:global(.app-shell[data-theme='dark'] .calendar-verify-button) { border-color: #56876a; background: #294b36; color: #d8f3df; }
+:global(.app-shell[data-theme='dark'] .calendar-day-modal .status-pending) { border-color: #806b3e; background: #403821; color: #f0d28d; }
+:global(.app-shell[data-theme='dark'] .calendar-day-modal .status-confirmed) { border-color: #426d55; background: #244231; color: #a4e2ba; }
+:global(.app-shell[data-theme='dark'] .payment-verified) { color: #8bd4a8; }
+:global(.app-shell[data-theme='dark'] .payment-pending) { color: #f0c77b; }
+:global(.app-shell[data-theme='dark'] .payment-rejected) { color: #f0a3a8; }
+:global(.app-shell[data-theme='dark'] .payment-unpaid) { color: #b2c2bb; }
+@media (max-width: 650px) {
+  :global(.directory-toolbar) {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 9px;
+    padding: 14px;
+  }
+  :global(.directory-toolbar .search-field),
+  :global(.directory-toolbar .filter-select) {
+    width: 100%;
+    min-width: 0;
+  }
+  .quick-date-filter {
+    width: 100%;
+    justify-content: flex-start;
+    overflow-x: auto;
+    overscroll-behavior-inline: contain;
+    scrollbar-width: thin;
+  }
+  .quick-date-filter button {
+    flex: 1 1 0;
+    min-width: 0;
+    min-height: 36px;
+    padding-inline: 5px;
+    font-size: 11px;
+    white-space: nowrap;
+  }
+  :global(.directory-toolbar .result-count) { justify-self: start; }
+  :global(.directory-panel .table-wrap) {
+    overflow: visible;
+    padding: 0 12px 12px;
+  }
+  :global(.directory-panel > .calendar-panel) {
+    padding: 14px 12px;
+    border-top: 1px solid #edf1f3;
+  }
+  :global(.calendar-panel .fc .fc-daygrid-day-top) {
+    min-height: 38px;
+    padding: 2px 2px 0;
+  }
+  :global(.calendar-panel .fc .fc-daygrid-day-number) {
+    padding: 3px;
+    font-size: 10px;
+  }
+  :global(.calendar-panel .fc .fc-daygrid-day-frame) { min-height: 57px; }
+  :global(.calendar-panel .fc .fc-col-header-cell-cushion) { padding: 7px 1px; font-size: 9px; }
+  :global(.calendar-panel .fc .fc-toolbar) {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 7px;
+    margin-bottom: 9px;
+  }
+  :global(.calendar-panel .fc .fc-toolbar-chunk:nth-child(1)) { grid-column: 1; grid-row: 2; justify-content: flex-start; }
+  :global(.calendar-panel .fc .fc-toolbar-chunk:nth-child(2)) { grid-column: 1 / -1; grid-row: 1; }
+  :global(.calendar-panel .fc .fc-toolbar-chunk:nth-child(3)) { grid-column: 2; grid-row: 2; justify-content: flex-end; }
+  :global(.calendar-panel .fc .fc-toolbar-title) { font-size: 16px; }
+  :global(.calendar-panel .fc .fc-button) { min-height: 32px; padding: 5px 8px; font-size: 10px; }
+  :global(.calendar-panel .fc .fc-button-group > .fc-button) { padding-inline: 7px; }
+  :global(.calendar-panel .calendar-appointment-count) {
+    top: 20px;
+    left: 2px;
+    max-width: calc(100% - 6px);
+    padding: 2px 3px;
+    font-size: 7px;
+  }
+  :global(.calendar-panel .calendar-appointment-count-full) { display: none; }
+  :global(.calendar-panel .calendar-appointment-count-short) { display: inline; }
+  :global(.calendar-panel .calendar-appointment-count-dot) {
+    margin-right: 2px;
+    font-size: 6px;
+  }
+  :global(.app-shell[data-theme='dark'] .directory-panel > .calendar-panel) {
+    border-color: #34473f;
+  }
+  .appointment-table {
+    display: block;
+    width: 100%;
+    min-width: 0;
+    border-collapse: separate;
+    border-spacing: 0;
+  }
+  .appointment-table thead { display: none; }
+  .appointment-table tbody { display: grid; gap: 11px; }
+  .appointment-table tbody tr {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    overflow: hidden;
+    border: 1px solid #dfe9e4;
+    border-radius: 13px;
+    background: #fff;
+    box-shadow: 0 4px 12px rgb(34 70 58 / 5%);
+  }
+  .appointment-table tbody td {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 4px;
+    padding: 10px 12px;
+    border-bottom: 1px solid #edf1ef;
+    color: #344f5c;
+    font-size: 12px;
+    line-height: 1.4;
+    text-align: left;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+  .appointment-table tbody td::before {
+    color: #73877f;
+    content: attr(data-label);
+    font-size: 9px;
+    font-weight: 750;
+    letter-spacing: .45px;
+    text-transform: uppercase;
+  }
+  .appointment-table tbody td[data-label='Appointment'],
+  .appointment-table tbody td[data-label='Service'],
+  .appointment-table tbody td[data-label='Actions'] { grid-column: 1 / -1; }
+  .appointment-table tbody td[data-label='Appointment'] { background: #f5faf7; }
+  .appointment-table tbody td[data-label='Actions'] {
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    border-bottom: 0;
+  }
+  .appointment-table tbody td[data-label='Actions']::before { width: 100%; }
+  .appointment-table .row-action {
+    min-height: 34px;
+    padding: 6px 10px;
+    border: 1px solid #d5e8dc;
+    border-radius: 8px;
+    background: #f5faf7;
+    font-size: 11px;
+  }
+  .appointment-table .row-action-danger {
+    border-color: #f0d7d7;
+    background: #fff8f8;
+  }
+  .appointment-table .status-badge { white-space: normal; }
+}
+:global(.app-shell[data-theme='dark'] .appointment-table tbody tr) {
+  border-color: #3b5148;
+  background: #1d2b26;
+  box-shadow: 0 4px 12px rgb(0 0 0 / 14%);
+}
+:global(.app-shell[data-theme='dark'] .appointment-table tbody td) {
+  border-color: #34473f;
+  color: #d3e0d9;
+}
+:global(.app-shell[data-theme='dark'] .appointment-table tbody td::before) { color: #a3b8ad; }
+:global(.app-shell[data-theme='dark'] .appointment-table tbody td[data-label='Appointment']) { background: #24362e; }
+:global(.app-shell[data-theme='dark'] .appointment-table .patient-name) { color: #c5e7d6; }
+:global(.app-shell[data-theme='dark'] .appointment-table .table-secondary) { color: #a3b3ae; }
+:global(.app-shell[data-theme='dark'] .appointment-table .row-action) {
+  border-color: #456251;
+  background: #263a30;
+  color: #b9e2cd;
+}
+:global(.app-shell[data-theme='dark'] .appointment-table .row-action-danger) {
+  border-color: #754849;
+  background: #40272a;
+  color: #f0a6a6;
+}
 @media(max-width:760px){.booking-grid{grid-template-columns:1fr 1fr}.calendar-day-item{grid-template-columns:70px minmax(0,1fr)}.calendar-day-status{grid-column:2;justify-items:start}}@media(max-width:460px){.booking-grid{grid-template-columns:1fr}}
 </style>
