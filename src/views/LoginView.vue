@@ -293,8 +293,7 @@ async function submit() {
   .login-feature-points{gap:6px;margin-top:13px}
   .login-feature-points span{min-height:28px;padding:0 8px;font-size:9.7px}
   .login-visual{display:none}
-  .login-mascot{right:22px;bottom:18px;scale:.75}
-  .login-mascot-bubble{right:62px;bottom:70px;width:170px}
+  .login-mascot{display:none}
   .login-intro::before{top:-120px;right:-300px}
   .login-intro::after{top:-90px;right:-220px}
 }
