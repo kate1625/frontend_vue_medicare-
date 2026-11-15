@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, nextTick, ref, watch } from 'vue'
+import { computed, onActivated, onBeforeUnmount, onDeactivated, onMounted, nextTick, ref, watch } from 'vue'
 import { RouterLink, useRouter } from 'vue-router'
 import { Calendar, type EventInput } from '@fullcalendar/core'
 import dayGridPlugin from '@fullcalendar/daygrid'
@@ -19,6 +19,7 @@ interface Appointment {
   appt_date: string
   appt_time: string
   end_time?: string | null
+  duration_min?: number | string
   status: string
   service_name: string
   price: number | string
@@ -39,6 +40,14 @@ interface Appointment {
   reschedule_reason?: string | null
 }
 interface HistoryEntry { log_id: number; action: string; created_at: string; actor: string }
+interface ReturnVisit {
+  record_id: number
+  follow_up_date: string
+  follow_up_time: string | null
+  diagnosis: string | null
+  treatment_done: string | null
+  dentist: string | null
+}
 
 function formatSubmittedDate(value: string) {
   const date = new Date(value)
@@ -51,7 +60,13 @@ const isPatient = computed(() => getPortalRole() === 'patient')
 const showCalendar = computed(() => props.pageNumber === 8 || props.pageNumber === 14)
 const calendarElement = ref<HTMLDivElement | null>(null)
 let calendar: Calendar | null = null
+let appointmentRefreshTimer: number | null = null
+let hasLoadedAppointments = false
+let hasActivatedOnce = false
 const appointments = ref<Appointment[]>([])
+const returnVisits = ref<ReturnVisit[]>([])
+const returnVisitError = ref('')
+const refreshingCalendar = ref(false)
 const showStaffBooking = ref(false)
 const staffCatalog = ref<{ services: {service_id:number;service_name:string}[]; dentists:{dentist_id:number;display_name:string}[] } | null>(null)
 const staffPatients = ref<{id:number;first_name:string;last_name:string}[]>([])
@@ -75,11 +90,15 @@ const showAppointmentDetails = ref(false)
 const detailRescheduling = ref(false)
 const detailSlotsLoading = ref(false)
 const detailSlots = ref<string[]>([])
+const detailSlotsLoaded = ref(false)
+const detailSlotsLoadFailed = ref(false)
 const detailRescheduleForm = ref({ date: '', time: '', reason: '' })
 const detailNotifying = ref(false)
 const selectedDayAppointments = computed(() => appointments.value
   .filter((item) => item.appt_date === selectedCalendarDate.value && ['pending', 'confirmed'].includes(item.status))
   .sort((first, second) => first.appt_time.localeCompare(second.appt_time)))
+const selectedDayReturnVisits = computed(() => returnVisits.value
+  .filter((item) => item.follow_up_date === selectedCalendarDate.value && item.follow_up_date >= localToday()))
 const verifyingPaymentId = ref<number | null>(null)
 const today = computed(() => localToday())
 const todayAppointments = computed(() => appointments.value.filter((item) =>
@@ -101,15 +120,45 @@ const visible = computed(() => appointments.value.filter((item) => {
   return matchesStatus && matchesRequestedDate && text.includes(query.value.trim().toLowerCase())
 }))
 
-async function loadAppointments() {
-  loading.value = true
+async function loadAppointments(showLoading = true) {
+  if (showLoading) loading.value = true
+  else refreshingCalendar.value = true
   error.value = ''
   try {
-    appointments.value = await getApiData<Appointment[]>('/api/appointments')
+    const [appointmentRows, returnVisitRows] = await Promise.all([
+      getApiData<Appointment[]>('/api/appointments'),
+      isPatient.value
+        ? getApiData<ReturnVisit[]>('/api/patient/return-visits')
+          .then((rows) => { returnVisitError.value = ''; return rows })
+          .catch((cause: unknown) => {
+            returnVisitError.value = cause instanceof ApiError ? cause.message : 'Could not load return visit reminders.'
+            return [] as ReturnVisit[]
+          })
+        : Promise.resolve([] as ReturnVisit[]),
+    ])
+    appointments.value = appointmentRows
+    returnVisits.value = returnVisitRows
+    hasLoadedAppointments = true
     refreshCalendarEvents()
   }
   catch (cause) { error.value = cause instanceof ApiError ? cause.message : 'Could not load appointments.' }
-  finally { loading.value = false }
+  finally {
+    if (showLoading) loading.value = false
+    refreshingCalendar.value = false
+  }
+}
+
+function startPatientCalendarRefresh() {
+  if (!isPatient.value || appointmentRefreshTimer !== null) return
+  appointmentRefreshTimer = window.setInterval(() => {
+    if (!refreshingCalendar.value) void loadAppointments(false)
+  }, 30000)
+}
+
+function stopPatientCalendarRefresh() {
+  if (appointmentRefreshTimer === null) return
+  window.clearInterval(appointmentRefreshTimer)
+  appointmentRefreshTimer = null
 }
 
 async function createStaffBooking() {
@@ -118,8 +167,8 @@ async function createStaffBooking() {
     await apiRequest('/api/appointments', { method:'POST', body:JSON.stringify(staffBooking.value) })
     showStaffBooking.value = false
     staffBooking.value = {patient_id:0,service_id:0,dentist_id:0,appt_date:'',appt_time:''}
-    success.value = 'Appointment confirmed and added to the clinic schedule.'
-    notify.success(success.value, 'Appointment booked')
+    success.value = 'Appointment request added to the clinic schedule. Confirm it after full payment is verified.'
+    notify.success(success.value, 'Appointment request created')
     await loadAppointments()
   } catch (cause) { error.value = cause instanceof ApiError ? cause.message : 'Could not book the appointment.'; notify.error(error.value, 'Appointment not booked') }
   finally { busyId.value = null }
@@ -158,7 +207,7 @@ function statusColor(status: string) {
 }
 
 function eventItems(): EventInput[] {
-  return appointments.value.filter((item) => ['pending', 'confirmed'].includes(item.status)).map((item) => ({
+  const appointmentEvents = appointments.value.filter((item) => ['pending', 'confirmed'].includes(item.status)).map((item) => ({
     id: String(item.appointment_id),
     title: '',
     start: `${item.appt_date}T${item.appt_time}`,
@@ -168,6 +217,24 @@ function eventItems(): EventInput[] {
     borderColor: statusColor(item.status),
     extendedProps: { appointmentId: item.appointment_id },
   }))
+  const returnEvents = isPatient.value
+    ? returnVisits.value.filter((item) => item.follow_up_date >= localToday()).map((item) => {
+      const color = '#8066b0'
+      return {
+        id: `return-${item.record_id}`,
+        title: 'Return visit',
+        start: item.follow_up_time
+          ? `${item.follow_up_date}T${item.follow_up_time.slice(0, 8)}`
+          : item.follow_up_date,
+        allDay: !item.follow_up_time,
+        backgroundColor: color,
+        borderColor: color,
+        classNames: ['calendar-return-visit'],
+        extendedProps: { isReturnVisit: true },
+      }
+    })
+    : []
+  return [...appointmentEvents, ...returnEvents]
 }
 
 function refreshCalendarEvents() {
@@ -216,15 +283,22 @@ async function openAppointmentDetails(item: Appointment) {
 
 async function loadDetailSlots() {
   detailSlots.value = []
+  detailSlotsLoaded.value = false
+  detailSlotsLoadFailed.value = false
   detailRescheduleForm.value.time = ''
   const item = detailAppointment.value
-  if (!item?.dentist_id || !detailRescheduleForm.value.date) return
+  if (!item?.dentist_id || !detailRescheduleForm.value.date) {
+    detailSlotsLoading.value = false
+    return
+  }
   detailSlotsLoading.value = true
   try {
     const params = new URLSearchParams({ dentist_id: String(item.dentist_id), service_id: String(item.service_id), date: detailRescheduleForm.value.date })
     const result = await getApiData<{ slots: string[] }>(`/api/appointments/availability?${params.toString()}`)
     detailSlots.value = result.slots
+    detailSlotsLoaded.value = true
   } catch (cause) {
+    detailSlotsLoadFailed.value = true
     error.value = cause instanceof ApiError ? cause.message : 'Could not check available reschedule times.'
   } finally { detailSlotsLoading.value = false }
 }
@@ -234,9 +308,10 @@ async function rescheduleFromDetails() {
   if (!item || !detailRescheduleForm.value.date || !detailRescheduleForm.value.time || !detailRescheduleForm.value.reason) return
   detailRescheduling.value = true; error.value = ''
   try {
-    await apiRequest(`/api/appointments/${item.appointment_id}/reschedule`, { method: 'POST', body: JSON.stringify({ appt_date: detailRescheduleForm.value.date, appt_time: detailRescheduleForm.value.time, reschedule_reason: detailRescheduleForm.value.reason }) })
-    success.value = 'Appointment rescheduled. A confirmation email was sent to the patient.'
-    notify.success(success.value, 'Appointment rescheduled')
+    const result = await apiRequest<{ data: { email_sent: boolean }; message: string }>(`/api/appointments/${item.appointment_id}/reschedule`, { method: 'POST', body: JSON.stringify({ appt_date: detailRescheduleForm.value.date, appt_time: detailRescheduleForm.value.time, reschedule_reason: detailRescheduleForm.value.reason }) })
+    success.value = result.message
+    if (result.data.email_sent) notify.success(success.value, 'Appointment rescheduled')
+    else notify.warning(success.value, 'Patient email not sent')
     detailRescheduleForm.value = { date: '', time: '', reason: '' }; detailSlots.value = []
     await loadAppointments()
     detailAppointment.value = appointments.value.find((appointment) => appointment.appointment_id === item.appointment_id) ?? item
@@ -277,18 +352,22 @@ async function verifyPayment(item: Appointment) {
   success.value = ''
   try {
     if (item.payment_transaction?.startsWith('paymongo:')) {
-      await apiRequest('/api/payments/paymongo/confirm', {
+      const result = await apiRequest<{ data: { email_sent: boolean }; message: string }>('/api/payments/paymongo/confirm', {
         method: 'POST',
         body: JSON.stringify({ payment_id: item.payment_id }),
       })
+      success.value = result.message
+      if (result.data.email_sent) notify.success(success.value, 'Payment verified')
+      else notify.warning(success.value, 'Payment verified, email not sent')
     } else {
-      await apiRequest(`/api/payments/${item.payment_id}/status`, {
+      const result = await apiRequest<{ data: { email_sent: boolean }; message: string }>(`/api/payments/${item.payment_id}/status`, {
         method: 'POST',
         body: JSON.stringify({ status: 'verified' }),
       })
+      success.value = result.message
+      if (result.data.email_sent) notify.success(success.value, 'Payment verified')
+      else notify.warning(success.value, 'Payment verified, email not sent')
     }
-    success.value = 'Payment verified. The patient confirmation email was sent through Brevo.'
-    notify.success(success.value, 'Payment verified')
     await loadAppointments()
   } catch (cause) {
     error.value = cause instanceof ApiError ? cause.message : 'Could not verify this payment.'
@@ -305,37 +384,34 @@ function initializeCalendar() {
     initialView: 'dayGridMonth',
     height: 'auto',
     headerToolbar: { left: 'prev,next today', center: 'title', right: 'dayGridMonth,timeGridWeek,timeGridDay' },
-    editable: !isPatient.value,
+    editable: false,
     events: eventItems(),
     dateClick: (info) => openCalendarDay(info.dateStr),
     dayCellDidMount: (info) => {
       const count = appointments.value.filter((item) => item.appt_date === calendarDateKey(info.date) && ['pending', 'confirmed'].includes(item.status)).length
-      if (count > 0) {
+      const returnCount = isPatient.value
+        ? returnVisits.value.filter((item) => item.follow_up_date === calendarDateKey(info.date) && item.follow_up_date >= localToday()).length
+        : 0
+      if (count > 0 || returnCount > 0) {
         const badge = document.createElement('span')
         badge.className = 'calendar-appointment-count'
-        badge.innerHTML = `<span class="calendar-appointment-count-dot" aria-hidden="true">●</span><span class="calendar-appointment-count-full">${count} ${count === 1 ? 'appointment' : 'appointments'}</span><span class="calendar-appointment-count-short">${count} appt</span>`
-        badge.title = `${count} ${count === 1 ? 'appointment' : 'appointments'} scheduled`
+        if (returnCount) badge.classList.add('has-return')
+        const labels = [
+          count ? `${count} ${count === 1 ? 'appointment' : 'appointments'}` : '',
+          returnCount ? `${returnCount} return ${returnCount === 1 ? 'visit' : 'visits'}` : '',
+        ].filter(Boolean)
+        const total = count + returnCount
+        badge.innerHTML = `<span class="calendar-appointment-count-dot" aria-hidden="true">●</span><span class="calendar-appointment-count-full">${labels.join(' · ')}</span><span class="calendar-appointment-count-short">${total} item${total === 1 ? '' : 's'}</span>`
+        badge.title = labels.join(' and ')
         info.el.querySelector('.fc-daygrid-day-top')?.appendChild(badge)
       }
     },
     eventClick: (info) => {
-      if (!isPatient.value) void router.push(`/staff/appointments/${info.event.id}`)
-    },
-    eventDrop: async (info) => {
-      const date = info.event.start
-      if (!date) { info.revert(); return }
-      const apptDate = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
-      const apptTime = `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`
-      try {
-        await apiRequest(`/api/appointments/${info.event.id}/reschedule`, { method: 'POST', body: JSON.stringify({ appt_date: apptDate, appt_time: apptTime }) })
-        success.value = 'Appointment rescheduled.'
-        notify.success(success.value, 'Appointment rescheduled')
-        await loadAppointments()
-      } catch (cause) {
-        info.revert()
-        error.value = cause instanceof ApiError ? cause.message : 'Could not reschedule appointment.'
-        notify.error(error.value, 'Rescheduling failed')
+      if (isPatient.value && info.event.extendedProps.isReturnVisit) {
+        openCalendarDay(info.event.startStr.slice(0, 10))
+        return
       }
+      if (!isPatient.value) void router.push(`/staff/appointments/${info.event.id}`)
     },
   })
   calendar.render()
@@ -367,13 +443,29 @@ async function confirmCancellation(reason: string) {
 }
 
 async function updateStatus(item: Appointment, status: string) {
+  if (status === 'confirmed' && !canConfirm(item)) {
+    error.value = 'The full appointment payment must be verified before it can be confirmed.'
+    notify.warning(error.value, 'Payment required')
+    return
+  }
+  if (status === 'no_show' && !canMarkNoShow(item)) {
+    error.value = 'An appointment can only be marked no-show after its scheduled end time.'
+    notify.warning(error.value, 'Appointment has not ended')
+    return
+  }
   busyId.value = item.appointment_id
   error.value = ''
   success.value = ''
   try {
-    await apiRequest(`/api/appointments/${item.appointment_id}/status`, { method: 'POST', body: JSON.stringify({ status }) })
-    success.value = `Appointment marked ${status.replace('_', ' ')}.`
-    notify.success(success.value, 'Appointment updated')
+    const result = await apiRequest<{ data: { email_sent: boolean }; message: string }>(`/api/appointments/${item.appointment_id}/status`, { method: 'POST', body: JSON.stringify({ status }) })
+    success.value = result.message
+    if (result.data.email_sent) notify.success(success.value, 'Appointment updated')
+    else notify.warning(success.value, 'Patient email not sent')
+    if (status === 'no_show') {
+      detailAppointment.value = item
+      detailHistory.value = []
+      showAppointmentDetails.value = true
+    }
     await loadAppointments()
     if (detailAppointment.value?.appointment_id === item.appointment_id) {
       detailAppointment.value = appointments.value.find((appointment) => appointment.appointment_id === item.appointment_id) ?? detailAppointment.value
@@ -388,9 +480,32 @@ function money(value: number | string) {
 }
 
 function canComplete(item: Appointment) {
-  const end = item.end_time || item.appt_time
-  const appointmentEnd = new Date(`${item.appt_date}T${end}`)
-  return appointmentEnd.getTime() <= Date.now() && Number(item.verified_amount) >= Number(item.price)
+  const appointmentEnd = scheduledEnd(item)
+  return !Number.isNaN(appointmentEnd.getTime())
+    && appointmentEnd.getTime() <= Date.now()
+    && Number(item.verified_amount) >= Number(item.price)
+}
+
+function canConfirm(item: Appointment) {
+  return Number.isFinite(Number(item.verified_amount))
+    && Number(item.verified_amount) >= Number(item.price)
+}
+
+function canMarkNoShow(item: Appointment) {
+  const appointmentEnd = scheduledEnd(item)
+  return !Number.isNaN(appointmentEnd.getTime()) && appointmentEnd.getTime() <= Date.now()
+}
+
+function noShowDisabledReason() {
+  return 'No-show is available after the appointment end time'
+}
+
+function scheduledEnd(item: Appointment) {
+  const appointmentEnd = new Date(`${item.appt_date}T${item.end_time || item.appt_time}`)
+  if (!item.end_time && !Number.isNaN(appointmentEnd.getTime())) {
+    appointmentEnd.setMinutes(appointmentEnd.getMinutes() + Math.max(15, Number(item.duration_min) || 30))
+  }
+  return appointmentEnd
 }
 
 function completeDisabledReason(item: Appointment) {
@@ -409,9 +524,16 @@ onMounted(async () => {
   await nextTick()
   initializeCalendar()
 })
+onActivated(() => {
+  if (hasActivatedOnce && hasLoadedAppointments && !refreshingCalendar.value) void loadAppointments(false)
+  hasActivatedOnce = true
+  if (calendar) void nextTick().then(() => calendar?.updateSize())
+  startPatientCalendarRefresh()
+})
 watch(() => [staffBooking.value.dentist_id, staffBooking.value.service_id, staffBooking.value.appt_date], loadStaffSlots)
 watch(() => detailRescheduleForm.value.date, loadDetailSlots)
-onBeforeUnmount(() => { calendar?.destroy(); calendar = null })
+onDeactivated(stopPatientCalendarRefresh)
+onBeforeUnmount(() => { stopPatientCalendarRefresh(); calendar?.destroy(); calendar = null })
 </script>
 
 <template>
@@ -422,6 +544,7 @@ onBeforeUnmount(() => { calendar?.destroy(); calendar = null })
   </section>
   <section v-if="showStaffBooking" class="surface staff-booking"><h2>Book for a patient</h2><form class="booking-grid" @submit.prevent="createStaffBooking"><label>Patient<select v-model.number="staffBooking.patient_id" required><option :value="0" disabled>Choose a patient</option><option v-for="p in staffPatients" :key="p.id" :value="p.id">{{p.first_name}} {{p.last_name}}</option></select></label><label>Service<select v-model.number="staffBooking.service_id" required><option :value="0" disabled>Choose a service</option><option v-for="s in staffCatalog?.services||[]" :key="s.service_id" :value="s.service_id">{{s.service_name}}</option></select></label><label>Dentist<select v-model.number="staffBooking.dentist_id" required><option :value="0" disabled>Choose a dentist</option><option v-for="d in staffCatalog?.dentists||[]" :key="d.dentist_id" :value="d.dentist_id">{{d.display_name}}</option></select></label><label>Date<input v-model="staffBooking.appt_date" type="date" :min="localToday()" required></label><label>Available time<select v-model="staffBooking.appt_time" required :disabled="staffSlotsLoading||!staffSlots.length"><option value="" disabled>{{staffSlotsLoading?'Checking schedule…':staffSlots.length?'Choose an open time':'Choose a dentist, service, and date first'}}</option><option v-for="slot in staffSlots" :key="slot" :value="slot">{{slot}}</option></select></label><div class="booking-actions"><button class="button button-primary" :disabled="busyId===-1||!staffBooking.appt_time">Confirm booking</button><button class="button button-quiet" type="button" @click="showStaffBooking=false">Close</button></div></form></section>
   <div v-if="error" class="alert alert-error" role="alert">{{ error }} <button class="text-button" type="button" @click="loadAppointments">Retry</button></div>
+  <div v-if="isPatient && returnVisitError" class="alert alert-error" role="alert">Return visit reminders could not be loaded: {{ returnVisitError }} <button class="text-button" type="button" @click="loadAppointments">Retry</button></div>
   <div v-if="isPatient && todayAppointments.length" class="alert alert-info appointment-day-reminder" role="status">
     <UiIcon name="bell" />
     <span><strong>Appointment reminder:</strong> you have {{ todayAppointments.length }} appointment{{ todayAppointments.length === 1 ? '' : 's' }} today. Please arrive a little early.</span>
@@ -430,8 +553,11 @@ onBeforeUnmount(() => { calendar?.destroy(); calendar = null })
     <div v-if="showCalendar" class="calendar-panel">
       <div class="calendar-summary">
         <span class="calendar-summary-dot" aria-hidden="true"></span>
-        <strong>{{ isPatient ? 'Your scheduled appointments' : 'Scheduled appointments' }}</strong>
-        <span>{{ isPatient ? 'Click a date to view your appointment details.' : 'Click a date to view the full schedule and payment status.' }}</span>
+        <strong>{{ isPatient ? 'Your appointments and return visits' : 'Scheduled appointments' }}</strong>
+        <span>{{ isPatient ? 'Return reminders are shown with your appointments. Click a date to view details.' : 'Click a date to view the full schedule and payment status.' }}</span>
+        <button v-if="isPatient" class="calendar-refresh-button" type="button" :disabled="refreshingCalendar" @click="loadAppointments(false)">
+          {{ refreshingCalendar ? 'Updating…' : 'Refresh calendar' }}
+        </button>
       </div>
       <div ref="calendarElement"></div>
     </div>
@@ -463,12 +589,15 @@ onBeforeUnmount(() => { calendar?.destroy(); calendar = null })
               <button v-if="!isPatient" class="row-action" type="button" @click="openAppointmentDetails(item)">Details</button>
               <button v-if="isPatient && ['pending','confirmed'].includes(item.status)" class="row-action row-action-danger" type="button" :disabled="busyId === item.appointment_id" :title="canCancel(item) ? 'Cancel appointment' : 'Past appointments cannot be cancelled'" @click="cancelAppointment(item)">Cancel</button>
               <template v-else-if="!isPatient && item.status === 'pending'">
-                <button class="row-action" type="button" :disabled="busyId === item.appointment_id" @click="updateStatus(item, 'confirmed')">Confirm</button>
+                <button class="row-action" type="button" :disabled="busyId === item.appointment_id || !canConfirm(item)" :title="canConfirm(item) ? 'Confirm appointment' : 'Verify full payment before confirming'" @click="updateStatus(item, 'confirmed')">Confirm</button>
                 <button class="row-action row-action-danger" type="button" :disabled="busyId === item.appointment_id" :title="canCancel(item) ? 'Cancel appointment' : 'Past appointments cannot be cancelled'" @click="cancelAppointment(item)">Cancel</button>
               </template>
               <template v-else-if="!isPatient && item.status === 'confirmed'">
                 <button class="row-action" type="button" :disabled="busyId === item.appointment_id || !canComplete(item)" :title="canComplete(item) ? 'Complete appointment' : completeDisabledReason(item)" @click="updateStatus(item, 'completed')">Complete</button>
-                <button class="row-action" type="button" :disabled="busyId === item.appointment_id" @click="updateStatus(item, 'no_show')">No-show</button>
+                <button class="row-action" type="button" :disabled="busyId === item.appointment_id || !canMarkNoShow(item)" :title="canMarkNoShow(item) ? 'Mark patient no-show' : noShowDisabledReason()" @click="updateStatus(item, 'no_show')">No-show</button>
+              </template>
+              <template v-else-if="!isPatient && item.status === 'no_show'">
+                <button class="row-action" type="button" @click="openAppointmentDetails(item)">Reschedule</button>
               </template>
             </td>
           </tr>
@@ -476,96 +605,115 @@ onBeforeUnmount(() => { calendar?.destroy(); calendar = null })
       </table>
     </div>
   </section>
-  <div v-if="showCalendarDay" class="modal-backdrop" @click.self="showCalendarDay=false">
-    <section class="form-modal calendar-day-modal" role="dialog" aria-modal="true" aria-labelledby="calendar-day-title">
-      <header class="modal-heading">
-        <div>
-          <p class="eyebrow">{{ isPatient ? 'YOUR APPOINTMENT' : 'DAILY SCHEDULE' }}</p>
-          <h2 id="calendar-day-title">{{ formatCalendarDate(selectedCalendarDate) }}</h2>
-          <p class="muted">{{ selectedDayAppointments.length }} {{ isPatient ? 'appointment' : 'scheduled appointment' }}{{ selectedDayAppointments.length === 1 ? '' : 's' }}</p>
-        </div>
-        <button class="text-button" type="button" aria-label="Close daily schedule" @click="showCalendarDay=false">Close</button>
-      </header>
-      <div v-if="selectedDayAppointments.length" class="calendar-day-list">
-        <article v-for="item in selectedDayAppointments" :key="item.appointment_id" class="calendar-day-item">
-          <div class="calendar-day-time">{{ item.appt_time }}<small v-if="item.end_time">–{{ item.end_time }}</small></div>
-          <div class="calendar-day-info">
-            <button v-if="!isPatient" class="patient-name calendar-details-link" type="button" @click="showCalendarDay=false; openAppointmentDetails(item)">
-              {{ item.service_name }} · Appointment #{{ item.appointment_id }}
-            </button>
-            <strong v-else class="patient-name">{{ item.service_name }}</strong>
-            <span v-if="isPatient">Dentist: {{ item.dentist || 'To be assigned' }}</span>
-            <span v-else>{{ item.patient || `Patient #${item.patient_id}` }} · Patient #{{ item.patient_id }} · Dentist: {{ item.dentist || 'Unassigned' }}</span>
-            <small v-if="isPatient" class="calendar-submitted-date">Requested on {{ formatSubmittedDate(item.created_at) }}</small>
+  <Teleport to="body">
+    <div v-if="showCalendarDay" class="modal-backdrop appointment-modal-backdrop" @click.self="showCalendarDay=false">
+      <section class="form-modal calendar-day-modal" role="dialog" aria-modal="true" aria-labelledby="calendar-day-title">
+        <header class="modal-heading">
+          <div>
+            <p class="eyebrow">{{ isPatient ? 'YOUR APPOINTMENT' : 'DAILY SCHEDULE' }}</p>
+            <h2 id="calendar-day-title">{{ formatCalendarDate(selectedCalendarDate) }}</h2>
+            <p class="muted">
+              {{ selectedDayAppointments.length }} {{ isPatient ? 'appointment' : 'scheduled appointment' }}{{ selectedDayAppointments.length === 1 ? '' : 's' }}
+              <span v-if="selectedDayReturnVisits.length"> · {{ selectedDayReturnVisits.length }} return {{ selectedDayReturnVisits.length === 1 ? 'visit' : 'visits' }}</span>
+            </p>
           </div>
-          <div class="calendar-day-status">
-            <span class="status-badge" :class="`status-${item.status}`">{{ item.status.replace('_', ' ') }}</span>
-            <template v-if="!isPatient">
-              <span class="payment-status" :class="paymentClass(item.payment_status)">{{ paymentLabel(item.payment_status) }}</span>
-            </template>
-            <template v-if="!isPatient && item.payment_status">
-              <small class="calendar-payment-detail">{{ item.payment_method || 'Payment method unavailable' }} · {{ item.payment_amount ? money(item.payment_amount) : 'Amount unavailable' }}</small>
-              <small v-if="item.payment_reference" class="calendar-payment-reference">Ref: {{ item.payment_reference }}</small>
-              <button
-                v-if="item.payment_status === 'pending'"
-                class="calendar-verify-button"
-                type="button"
-                :disabled="verifyingPaymentId === item.payment_id"
-                @click="verifyPayment(item)"
-              >
-                {{ verifyingPaymentId === item.payment_id ? 'Verifying…' : 'Verify payment & email patient' }}
+          <button class="text-button" type="button" aria-label="Close daily schedule" @click="showCalendarDay=false">Close</button>
+        </header>
+        <div v-if="selectedDayAppointments.length || selectedDayReturnVisits.length" class="calendar-day-list">
+          <article v-for="item in selectedDayAppointments" :key="item.appointment_id" class="calendar-day-item">
+            <div class="calendar-day-time">{{ item.appt_time }}<small v-if="item.end_time">–{{ item.end_time }}</small></div>
+            <div class="calendar-day-info">
+              <button v-if="!isPatient" class="patient-name calendar-details-link" type="button" @click="showCalendarDay=false; openAppointmentDetails(item)">
+                {{ item.service_name }} · Appointment #{{ item.appointment_id }}
               </button>
-            </template>
-          </div>
-        </article>
-      </div>
-      <div v-else class="empty-inline">
-        <strong>No appointments scheduled</strong>
-        <p>This date has no appointment records.</p>
-      </div>
-    </section>
-  </div>
-  <div v-if="showAppointmentDetails && detailAppointment" class="modal-backdrop" @click.self="showAppointmentDetails=false">
-    <section class="form-modal appointment-details-modal" role="dialog" aria-modal="true" aria-labelledby="appointment-details-title">
-      <header class="modal-heading">
-        <div><p class="eyebrow">APPOINTMENT DETAILS</p><h2 id="appointment-details-title">Appointment #{{ detailAppointment.appointment_id }}</h2><p class="muted">{{ detailAppointment.patient || `Patient #${detailAppointment.patient_id}` }}</p></div>
-        <button class="text-button" type="button" @click="showAppointmentDetails=false">Close</button>
-      </header>
-      <div class="detail-popup-grid">
-        <div><dt>Patient</dt><dd>{{ detailAppointment.patient || `Patient #${detailAppointment.patient_id}` }} · #{{ detailAppointment.patient_id }}</dd></div>
-        <div><dt>Service</dt><dd>{{ detailAppointment.service_name }}</dd></div>
-        <div><dt>Date &amp; time</dt><dd>{{ detailAppointment.appt_date }} · {{ detailAppointment.appt_time }}</dd></div>
-        <div><dt>Dentist</dt><dd>{{ detailAppointment.dentist || 'Unassigned' }}</dd></div>
-        <div><dt>Payment</dt><dd>{{ detailAppointment.payment_status || 'Unpaid' }}</dd></div>
-        <div><dt>Status</dt><dd><span class="status-badge" :class="`status-${detailAppointment.status}`">{{ detailAppointment.status.replace('_', ' ') }}</span></dd></div>
-        <div><dt>Requested</dt><dd>{{ formatSubmittedDate(detailAppointment.created_at) }}</dd></div>
-        <div v-if="detailAppointment.reschedule_reason" class="detail-popup-wide"><dt>Reschedule reason</dt><dd>{{ detailAppointment.reschedule_reason }}</dd></div>
-      </div>
-      <div class="history-popup">
-        <div class="history-heading"><div><p class="eyebrow">CHANGE HISTORY</p><h3>What changed</h3></div><span class="history-count">{{ detailHistory.length }} events</span></div>
-        <div v-if="detailLoading" class="empty-inline">Loading history…</div>
-        <div v-else-if="detailHistory.length" class="history-list">
-          <article v-for="entry in detailHistory" :key="entry.log_id" class="history-item"><span class="history-dot" aria-hidden="true"></span><div><strong>{{ historyLabel(entry.action) }}</strong><p>{{ entry.actor }} · {{ formatHistoryDate(entry.created_at) }}</p></div></article>
+              <strong v-else class="patient-name">{{ item.service_name }}</strong>
+              <span v-if="isPatient">Dentist: {{ item.dentist || 'To be assigned' }}</span>
+              <span v-else>{{ item.patient || `Patient #${item.patient_id}` }} · Patient #{{ item.patient_id }} · Dentist: {{ item.dentist || 'Unassigned' }}</span>
+              <small v-if="isPatient" class="calendar-submitted-date">Requested on {{ formatSubmittedDate(item.created_at) }}</small>
+            </div>
+            <div class="calendar-day-status">
+              <span class="status-badge" :class="`status-${item.status}`">{{ item.status.replace('_', ' ') }}</span>
+              <template v-if="!isPatient">
+                <span class="payment-status" :class="paymentClass(item.payment_status)">{{ paymentLabel(item.payment_status) }}</span>
+              </template>
+              <template v-if="!isPatient && item.payment_status">
+                <small class="calendar-payment-detail">{{ item.payment_method || 'Payment method unavailable' }} · {{ item.payment_amount ? money(item.payment_amount) : 'Amount unavailable' }}</small>
+                <small v-if="item.payment_reference" class="calendar-payment-reference">Ref: {{ item.payment_reference }}</small>
+                <button
+                  v-if="item.payment_status === 'pending'"
+                  class="calendar-verify-button"
+                  type="button"
+                  :disabled="verifyingPaymentId === item.payment_id"
+                  @click="verifyPayment(item)"
+                >
+                  {{ verifyingPaymentId === item.payment_id ? 'Verifying…' : 'Verify payment & email patient' }}
+                </button>
+              </template>
+            </div>
+          </article>
+          <article v-for="item in selectedDayReturnVisits" :key="`return-${item.record_id}`" class="calendar-day-item calendar-day-return-item">
+            <div class="calendar-day-time">{{ item.follow_up_time ? item.follow_up_time.slice(0, 5) : 'Time not set' }}</div>
+            <div class="calendar-day-info">
+              <strong class="patient-name">Return visit</strong>
+              <span>Dentist: {{ item.dentist || 'Your care team' }}</span>
+              <small>{{ item.treatment_done || item.diagnosis || 'Follow-up recommended after treatment' }}</small>
+            </div>
+            <div class="calendar-day-status"><span class="calendar-return-tag">Return reminder</span></div>
+          </article>
         </div>
-        <p v-else class="muted">No recorded changes yet.</p>
-      </div>
-      <section v-if="detailAppointment.dentist_id && ['pending','confirmed'].includes(detailAppointment.status)" class="popup-reschedule">
-        <div class="popup-section-heading"><div><p class="eyebrow">SCHEDULE MANAGEMENT</p><h3>Reschedule appointment</h3></div><span class="popup-section-note">Patient will be emailed</span></div>
-        <form class="popup-reschedule-form" @submit.prevent="rescheduleFromDetails">
-          <label>Date<input v-model="detailRescheduleForm.date" type="date" :min="localToday()" required /></label>
-          <label>Available time<select v-model="detailRescheduleForm.time" :disabled="detailSlotsLoading || !detailSlots.length" required><option value="" disabled>{{ detailSlotsLoading ? 'Checking availability…' : detailSlots.length ? 'Choose a time' : 'Choose a date first' }}</option><option v-for="slot in detailSlots" :key="slot" :value="slot">{{ slot }}</option></select></label>
-          <label class="popup-reason-field">Reason<select v-model="detailRescheduleForm.reason" required><option value="" disabled>Choose a reason</option><option>Patient did not attend the scheduled time</option><option>Doctor emergency or unavailable</option><option>Clinic schedule changed</option><option>Patient requested a different date</option><option>Other</option></select></label>
-          <button class="button button-primary" type="submit" :disabled="detailRescheduling || detailSlotsLoading || !detailRescheduleForm.time || !detailRescheduleForm.reason">{{ detailRescheduling ? 'Rescheduling…' : 'Reschedule & email' }}</button>
-        </form>
+        <div v-else class="empty-inline">
+          <strong>No appointments or return visits</strong>
+          <p>This date has no scheduled appointments or return reminders.</p>
+        </div>
       </section>
-      <div class="appointment-actions">
-        <button class="button button-quiet" type="button" :disabled="detailNotifying" @click="emailFromDetails">{{ detailNotifying ? 'Sending…' : 'Email patient' }}</button>
-        <button v-if="detailAppointment.status === 'pending'" class="button button-primary" type="button" :disabled="busyId === detailAppointment.appointment_id" @click="updateStatus(detailAppointment, 'confirmed')">Confirm appointment</button>
-        <button v-if="detailAppointment.status === 'confirmed'" class="button button-primary" type="button" :disabled="busyId === detailAppointment.appointment_id || !canComplete(detailAppointment)" :title="canComplete(detailAppointment) ? 'Mark appointment completed' : completeDisabledReason(detailAppointment)" @click="updateStatus(detailAppointment, 'completed')">Mark completed</button>
-        <button v-if="detailAppointment.status === 'confirmed'" class="button button-quiet" type="button" :disabled="busyId === detailAppointment.appointment_id" @click="updateStatus(detailAppointment, 'no_show')">Mark no-show</button>
-      </div>
-    </section>
-  </div>
+    </div>
+    <div v-if="showAppointmentDetails && detailAppointment" class="modal-backdrop appointment-modal-backdrop" @click.self="showAppointmentDetails=false">
+      <section class="form-modal appointment-details-modal" role="dialog" aria-modal="true" aria-labelledby="appointment-details-title">
+        <header class="modal-heading appointment-modal-heading">
+          <div>
+            <p class="eyebrow">APPOINTMENT DETAILS</p>
+            <h2 id="appointment-details-title">Appointment #{{ detailAppointment.appointment_id }}</h2>
+            <p class="appointment-patient-subtitle">{{ detailAppointment.patient || `Patient #${detailAppointment.patient_id}` }}</p>
+          </div>
+          <button class="icon-button appointment-close" type="button" aria-label="Close appointment details" @click="showAppointmentDetails=false"><UiIcon name="x" /></button>
+        </header>
+        <div class="detail-popup-grid">
+          <div><dt>Patient</dt><dd>{{ detailAppointment.patient || `Patient #${detailAppointment.patient_id}` }} · #{{ detailAppointment.patient_id }}</dd></div>
+          <div><dt>Service</dt><dd>{{ detailAppointment.service_name }}</dd></div>
+          <div><dt>Date &amp; time</dt><dd>{{ detailAppointment.appt_date }} · {{ detailAppointment.appt_time }}</dd></div>
+          <div><dt>Dentist</dt><dd>{{ detailAppointment.dentist || 'Unassigned' }}</dd></div>
+          <div><dt>Payment</dt><dd>{{ detailAppointment.payment_status || 'Unpaid' }}</dd></div>
+          <div><dt>Verified payment</dt><dd>{{ money(detailAppointment.verified_amount) }} / {{ money(detailAppointment.price) }}</dd></div>
+          <div><dt>Status</dt><dd><span class="status-badge" :class="`status-${detailAppointment.status}`">{{ detailAppointment.status.replace('_', ' ') }}</span></dd></div>
+          <div><dt>Requested</dt><dd>{{ formatSubmittedDate(detailAppointment.created_at) }}</dd></div>
+          <div v-if="detailAppointment.reschedule_reason" class="detail-popup-wide"><dt>Reschedule reason</dt><dd>{{ detailAppointment.reschedule_reason }}</dd></div>
+        </div>
+        <div class="history-popup">
+          <div class="history-heading"><div><p class="eyebrow">CHANGE HISTORY</p><h3>What changed</h3></div><span class="history-count">{{ detailHistory.length }} events</span></div>
+          <div v-if="detailLoading" class="empty-inline">Loading history…</div>
+          <div v-else-if="detailHistory.length" class="history-list">
+            <article v-for="entry in detailHistory" :key="entry.log_id" class="history-item"><span class="history-dot" aria-hidden="true"></span><div><strong>{{ historyLabel(entry.action) }}</strong><p>{{ entry.actor }} · {{ formatHistoryDate(entry.created_at) }}</p></div></article>
+          </div>
+          <p v-else class="muted">No recorded changes yet.</p>
+        </div>
+        <section v-if="detailAppointment.dentist_id && detailAppointment.status === 'no_show'" class="popup-reschedule">
+          <div class="popup-section-heading"><div><p class="eyebrow">SCHEDULE MANAGEMENT</p><h3>Reschedule appointment</h3></div><span class="popup-section-note">Patient will be emailed</span></div>
+          <form class="popup-reschedule-form" @submit.prevent="rescheduleFromDetails">
+            <label>Date<input v-model="detailRescheduleForm.date" type="date" :min="localToday()" required /></label>
+            <label>Available time<select v-model="detailRescheduleForm.time" :disabled="detailSlotsLoading || detailSlotsLoadFailed || !detailSlots.length" required><option value="" disabled>{{ detailSlotsLoading ? 'Checking availability…' : !detailRescheduleForm.date ? 'Choose a date first' : detailSlotsLoadFailed ? 'Could not load slots' : detailSlotsLoaded && !detailSlots.length ? 'No available slots' : 'Choose a time' }}</option><option v-for="slot in detailSlots" :key="slot" :value="slot">{{ slot }}</option></select></label>
+            <label class="popup-reason-field">Reason<select v-model="detailRescheduleForm.reason" required><option value="" disabled>Choose a reason</option><option>Patient did not attend the scheduled time</option><option>Doctor emergency or unavailable</option><option>Clinic schedule changed</option><option>Patient requested a different date</option><option>Other</option></select></label>
+            <button class="button button-primary" type="submit" :disabled="detailRescheduling || detailSlotsLoading || !detailRescheduleForm.time || !detailRescheduleForm.reason">{{ detailRescheduling ? 'Rescheduling…' : 'Reschedule & email' }}</button>
+          </form>
+        </section>
+        <div class="appointment-actions appointment-details-actions">
+          <button class="button button-quiet" type="button" :disabled="detailNotifying" @click="emailFromDetails">{{ detailNotifying ? 'Sending…' : 'Email patient' }}</button>
+          <button v-if="detailAppointment.status === 'pending'" class="button button-primary" type="button" :disabled="busyId === detailAppointment.appointment_id || !canConfirm(detailAppointment)" :title="canConfirm(detailAppointment) ? 'Confirm appointment' : 'Verify full payment before confirming'" @click="updateStatus(detailAppointment, 'confirmed')">Confirm appointment</button>
+          <button v-if="detailAppointment.status === 'confirmed'" class="button button-primary" type="button" :disabled="busyId === detailAppointment.appointment_id || !canComplete(detailAppointment)" :title="canComplete(detailAppointment) ? 'Mark appointment completed' : completeDisabledReason(detailAppointment)" @click="updateStatus(detailAppointment, 'completed')">Mark completed</button>
+          <button v-if="detailAppointment.status === 'confirmed'" class="button button-quiet" type="button" :disabled="busyId === detailAppointment.appointment_id || !canMarkNoShow(detailAppointment)" :title="canMarkNoShow(detailAppointment) ? 'Mark patient no-show' : noShowDisabledReason()" @click="updateStatus(detailAppointment, 'no_show')">Mark no-show</button>
+        </div>
+      </section>
+    </div>
+  </Teleport>
   <ConfirmDialog
     :open="cancelTarget !== null"
     title="Cancel this appointment?"
@@ -581,11 +729,101 @@ onBeforeUnmount(() => { calendar?.destroy(); calendar = null })
 </template>
 
 <style scoped>
-.staff-booking{margin:-10px 0 20px;padding:20px}.staff-booking h2{margin:0 0 14px}.booking-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}.booking-grid label{display:grid;gap:6px;color:#718793;font-size:13px;font-weight:650}.booking-grid input,.booking-grid select{min-height:40px;border:1px solid #dce8e8;border-radius:10px;padding:9px;background:#fff;color:#26364a}.booking-actions{display:flex;align-items:end;gap:8px}.appointment-day-reminder{display:flex;align-items:center;gap:9px}.appointment-day-reminder svg{flex:none;color:#2c8667}.button-spinner{display:inline-block;width:12px;height:12px;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;animation:spin .7s linear infinite}.quick-date-filter{display:flex;gap:4px;padding:3px;border:1px solid var(--line);border-radius:10px;background:var(--surface)}.quick-date-filter button{border:0;border-radius:7px;padding:7px 10px;background:transparent;color:var(--muted);font-size:12px;font-weight:700;cursor:pointer}.quick-date-filter button.active{background:var(--soft-teal);color:var(--teal-dark)}.appointment-details-modal{width:min(760px,100%);max-height:90vh;overflow:auto}.detail-popup-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;padding:17px;border:1px solid var(--line);border-radius:14px;background:var(--surface)}.detail-popup-grid dt{color:var(--muted);font-size:11px;font-weight:700}.detail-popup-grid dd{margin:4px 0 0;color:var(--ink);font-size:14px;font-weight:650}.detail-popup-wide{grid-column:1 / -1}.history-popup,.popup-reschedule{margin-top:16px;padding:17px;border:1px solid var(--line);border-radius:14px;background:var(--surface)}.history-popup h3,.popup-reschedule h3{margin:4px 0 0;font-size:16px}.popup-section-heading,.history-heading{display:flex;align-items:center;justify-content:space-between;gap:12px}.popup-section-note{color:var(--muted);font-size:11px;font-weight:700}.popup-reschedule-form{display:grid;grid-template-columns:1fr 1fr auto;align-items:end;gap:10px;margin-top:14px}.popup-reschedule-form label{display:grid;gap:5px;color:var(--muted);font-size:11px;font-weight:700}.popup-reschedule-form input,.popup-reschedule-form select{min-height:40px;border:1px solid var(--line);border-radius:9px;padding:8px 10px;background:var(--surface);color:var(--ink)}.popup-reason-field{grid-column:1 / -1}.calendar-details-link{padding:0;border:0;background:transparent;color:var(--teal-dark);font:inherit;font-weight:700;text-align:left;cursor:pointer}@media(max-width:760px){.booking-grid{grid-template-columns:1fr 1fr}.detail-popup-grid,.popup-reschedule-form{grid-template-columns:1fr}.popup-reschedule-form .button{width:100%}.popup-reason-field{grid-column:auto}}@media(max-width:460px){.booking-grid{grid-template-columns:1fr}}
+.staff-booking{margin:-10px 0 20px;padding:20px}.staff-booking h2{margin:0 0 14px}.booking-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}.booking-grid label{display:grid;gap:6px;color:#718793;font-size:13px;font-weight:650}.booking-grid input,.booking-grid select{min-height:40px;border:1px solid #dce8e8;border-radius:10px;padding:9px;background:#fff;color:#26364a}.booking-actions{display:flex;align-items:end;gap:8px}.appointment-day-reminder{display:flex;align-items:center;gap:9px}.appointment-day-reminder svg{flex:none;color:#2c8667}.button-spinner{display:inline-block;width:12px;height:12px;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;animation:spin .7s linear infinite}.quick-date-filter{display:flex;gap:4px;padding:3px;border:1px solid var(--line);border-radius:10px;background:var(--surface)}.quick-date-filter button{border:0;border-radius:7px;padding:7px 10px;background:transparent;color:var(--muted);font-size:12px;font-weight:700;cursor:pointer}.quick-date-filter button.active{background:var(--soft-teal);color:var(--teal-dark)}.appointment-details-modal{width:min(760px,100%);max-height:min(calc(100dvh - 40px),900px);overflow:auto;overscroll-behavior:contain}.detail-popup-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;padding:17px;border:1px solid var(--line);border-radius:14px;background:var(--surface)}.detail-popup-grid dt{color:var(--muted);font-size:11px;font-weight:700}.detail-popup-grid dd{margin:4px 0 0;color:var(--ink);font-size:14px;font-weight:650}.detail-popup-wide{grid-column:1 / -1}.history-popup,.popup-reschedule{margin-top:16px;padding:17px;border:1px solid var(--line);border-radius:14px;background:var(--surface)}.history-popup h3,.popup-reschedule h3{margin:4px 0 0;font-size:16px}.popup-section-heading,.history-heading{display:flex;align-items:center;justify-content:space-between;gap:12px}.popup-section-note{color:var(--muted);font-size:11px;font-weight:700}.popup-reschedule-form{display:grid;grid-template-columns:1fr 1fr auto;align-items:end;gap:10px;margin-top:14px}.popup-reschedule-form label{display:grid;gap:5px;color:var(--muted);font-size:11px;font-weight:700}.popup-reschedule-form input,.popup-reschedule-form select{min-height:40px;border:1px solid var(--line);border-radius:9px;padding:8px 10px;background:var(--surface);color:var(--ink)}.popup-reason-field{grid-column:1 / -1}.calendar-details-link{padding:0;border:0;background:transparent;color:var(--teal-dark);font:inherit;font-weight:700;text-align:left;cursor:pointer}@media(max-width:760px){.booking-grid{grid-template-columns:1fr 1fr}.detail-popup-grid,.popup-reschedule-form{grid-template-columns:1fr}.popup-reschedule-form .button{width:100%}.popup-reason-field{grid-column:auto}}@media(max-width:460px){.booking-grid{grid-template-columns:1fr}}
+.appointment-details-modal {
+  width: min(760px, 100%);
+  max-height: min(calc(100dvh - 48px), 900px);
+  padding: 26px;
+  border-color: var(--line);
+  border-radius: 20px;
+  background: var(--surface);
+  color: var(--ink);
+  box-shadow: 0 28px 80px rgb(5 28 21 / 32%);
+}
+.appointment-modal-heading {
+  align-items: flex-start;
+  gap: 18px;
+  margin-bottom: 18px;
+  padding-bottom: 18px;
+  border-bottom: 1px solid var(--line);
+}
+.appointment-modal-heading h2 { margin: 0; font-size: clamp(20px, 3vw, 25px); letter-spacing: -.025em; }
+.appointment-patient-subtitle { margin: 7px 0 0; color: var(--muted); font-size: 14px; }
+.appointment-close { flex: none; width: 38px; height: 38px; border: 1px solid var(--line); border-radius: 11px; background: var(--surface); color: var(--muted); }
+.appointment-close:hover { border-color: var(--teal-dark); color: var(--teal-dark); }
+.detail-popup-grid {
+  gap: 10px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+.detail-popup-grid > div {
+  display: grid;
+  align-content: start;
+  gap: 6px;
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+}
+.detail-popup-grid dt { font-size: 10px; letter-spacing: .07em; text-transform: uppercase; }
+.detail-popup-grid dd { margin: 0; overflow-wrap: anywhere; font-size: 13px; line-height: 1.45; }
+.history-popup, .popup-reschedule {
+  margin-top: 14px;
+  padding: 18px;
+  border-color: var(--line);
+  border-radius: 15px;
+  background: var(--surface);
+}
+.history-popup h3, .popup-reschedule h3 { font-size: 17px; }
+.history-count {
+  flex: none;
+  padding: 5px 9px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+}
+.history-list { display: grid; gap: 0; margin-top: 8px; }
+.history-item { padding: 12px 0; border-top: 1px solid var(--line); }
+.popup-reschedule-form {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 17px;
+}
+.popup-reschedule-form label { gap: 6px; font-size: 12px; }
+.popup-reschedule-form input, .popup-reschedule-form select { min-height: 44px; border-radius: 10px; }
+.popup-reschedule-form .button { grid-column: 1 / -1; width: fit-content; min-width: 220px; min-height: 44px; margin-top: 2px; }
+.appointment-details-actions {
+  justify-content: flex-end;
+  margin: 18px -26px -26px;
+  padding: 16px 26px 20px;
+  border-top: 1px solid var(--line);
+}
+@media(max-width:760px) {
+  .appointment-details-modal { padding: 22px; }
+  .appointment-details-actions { margin: 18px -22px -22px; padding: 15px 22px 18px; }
+  .popup-reschedule-form { grid-template-columns: 1fr; }
+  .popup-reschedule-form .button { width: 100%; }
+}
+@media(max-width:460px) {
+  .appointment-details-modal { padding: 18px; border-radius: 16px; }
+  .appointment-modal-heading { margin-bottom: 14px; padding-bottom: 14px; }
+  .detail-popup-grid { grid-template-columns: 1fr; }
+  .appointment-details-actions { margin: 16px -18px -18px; padding: 14px 18px 16px; }
+  .appointment-details-actions .button { flex: 1 1 100%; justify-content: center; }
+  .popup-section-heading { align-items: flex-start; }
+  .popup-section-note { max-width: 118px; text-align: right; }
+}
 :global(.calendar-summary) { display: grid; grid-template-columns: 9px minmax(0, 1fr); align-items: center; gap: 3px 9px; margin-bottom: 14px; padding: 11px 13px; border: 1px solid #dce8e3; border-radius: 11px; background: #f7fbf9; color: #6b8085; font-size: 11px; line-height: 1.45; }
 :global(.calendar-summary strong) { color: #2c6253; font-size: 12px; }
 :global(.calendar-summary > span:last-child) { grid-column: 2; }
 :global(.calendar-summary-dot) { grid-row: 1 / span 2; width: 8px; height: 8px; align-self: start; margin-top: 4px; border-radius: 50%; background: #3a9b70; box-shadow: 0 0 0 3px #dcefe4; }
+.calendar-refresh-button { grid-column: 2; justify-self: start; min-height: 30px; padding: 5px 9px; border: 1px solid #cfe0d7; border-radius: 7px; background: #fff; color: #28775b; font-size: 10px; font-weight: 700; cursor: pointer; }
+.calendar-refresh-button:disabled { cursor: wait; opacity: .65; }
+:global(.app-shell[data-theme='dark'] .calendar-refresh-button) { border-color: #486153; background: #263630; color: #b9e2cd; }
 :global(.calendar-panel .fc .fc-toolbar) { align-items: center; margin-bottom: 12px; }
 :global(.calendar-panel .fc .fc-toolbar-chunk) { gap: 5px; }
 :global(.calendar-panel .fc .fc-toolbar-title) { color: #234454; font-size: 17px; font-weight: 750; }
@@ -603,8 +841,12 @@ onBeforeUnmount(() => { calendar?.destroy(); calendar = null })
 :global(.calendar-panel .fc .fc-day-today) { background: #edf7f1; }
 :global(.calendar-appointment-count) { position: absolute; top: 23px; left: 3px; display: flex; align-items: center; width: fit-content; max-width: calc(100% - 6px); min-width: 0; margin: 0; padding: 3px 5px; overflow: hidden; border: 1px solid #acd9be; border-radius: 999px; background: #e4f4eb; color: #28775b; font-size: 9px; font-weight: 800; line-height: 1.1; text-overflow: ellipsis; white-space: nowrap; }
 :global(.calendar-appointment-count-dot) { flex: none; margin-right: 3px; color: #3a9b70; font-size: 8px; }
+:global(.calendar-appointment-count.has-return) { border-color: #c9b9e5; background: #f0ebf8; color: #654a91; }
+:global(.calendar-appointment-count.has-return .calendar-appointment-count-dot) { color: #8066b0; }
 :global(.calendar-appointment-count-short) { display: none; }
-.calendar-day-modal { width: min(760px, 100%); }
+:global(.calendar-panel .fc .calendar-return-visit) { font-weight: 700; }
+.calendar-day-modal { width: min(760px, 100%); max-height: min(calc(100dvh - 40px), 900px); overscroll-behavior: contain; }
+:global(.appointment-modal-backdrop) { z-index: 100; padding: 24px; }
 .calendar-day-list { display: grid; gap: 10px; max-height: 58vh; overflow: auto; }
 .calendar-day-item { display: grid; grid-template-columns: 80px minmax(0, 1fr) auto; align-items: center; gap: 14px; padding: 14px; border: 1px solid #dce8e3; border-radius: 12px; background: #fbfdfc; }
 .calendar-day-time { color: #26745c; font-size: 14px; font-weight: 800; }
@@ -612,6 +854,8 @@ onBeforeUnmount(() => { calendar?.destroy(); calendar = null })
 .calendar-day-info { display: grid; gap: 4px; min-width: 0; }
 .calendar-day-info .patient-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .calendar-day-info span { color: #71858a; font-size: 11px; }
+.calendar-day-info small { color: #71858a; font-size: 10px; }
+.calendar-return-tag { display: inline-flex; align-items: center; width: fit-content; padding: 5px 8px; border: 1px solid #d6c9e8; border-radius: 999px; background: #f2edf9; color: #654a91; font-size: 10px; font-weight: 750; }
 .calendar-day-status { display: grid; justify-items: end; gap: 6px; }
 .payment-status { font-size: 10.5px; font-weight: 700; }
 .calendar-payment-detail,
@@ -628,6 +872,8 @@ onBeforeUnmount(() => { calendar?.destroy(); calendar = null })
 :global(.app-shell[data-theme='dark'] .calendar-summary-dot) { background: #70c697; box-shadow: 0 0 0 3px #294637; }
 :global(.app-shell[data-theme='dark'] .calendar-appointment-count) { border-color: #56876a; background: #294b36; color: #e2f5e7; }
 :global(.app-shell[data-theme='dark'] .calendar-appointment-count-dot) { color: #a4e2ba; }
+:global(.app-shell[data-theme='dark'] .calendar-appointment-count.has-return) { border-color: #79669d; background: #3b3151; color: #e8def8; }
+:global(.app-shell[data-theme='dark'] .calendar-appointment-count.has-return .calendar-appointment-count-dot) { color: #c1a8ef; }
 :global(.app-shell[data-theme='dark'] .calendar-panel .fc) { color: #d2dfd8; }
 :global(.app-shell[data-theme='dark'] .calendar-panel .fc .fc-toolbar-title) { color: #e7f0eb; }
 :global(.app-shell[data-theme='dark'] .calendar-panel .fc .fc-col-header-cell) { background: #24352e; }
@@ -649,27 +895,53 @@ onBeforeUnmount(() => { calendar?.destroy(); calendar = null })
   color: #e5f7ea;
   box-shadow: inset 0 0 0 1px #5e9c72;
 }
-:global(.app-shell[data-theme='dark'] .calendar-day-modal) { border-color: #40534b; background: #1d2b26; color: #e4ede9; }
-:global(.app-shell[data-theme='dark'] .calendar-day-modal .modal-heading h2) { color: #f0f5f2; }
-:global(.app-shell[data-theme='dark'] .calendar-day-modal .modal-heading .eyebrow) { color: #9cdbb4; }
-:global(.app-shell[data-theme='dark'] .calendar-day-modal .modal-heading .muted) { color: #b2c2bb; }
-:global(.app-shell[data-theme='dark'] .calendar-day-modal .text-button) { color: #9cdbb4; }
-:global(.app-shell[data-theme='dark'] .calendar-day-item) { border-color: #40534b; background: #263630; }
-:global(.app-shell[data-theme='dark'] .calendar-day-time) { color: #9cdbb4; }
-:global(.app-shell[data-theme='dark'] .calendar-day-time small),
-:global(.app-shell[data-theme='dark'] .calendar-day-info span),
-:global(.app-shell[data-theme='dark'] .calendar-submitted-date) { color: #b2c2bb; }
-:global(.app-shell[data-theme='dark'] .calendar-day-info .patient-name) { color: #e4ede9; }
-:global(.app-shell[data-theme='dark'] .calendar-details-link) { color: #9cdbb4; }
-:global(.app-shell[data-theme='dark'] .calendar-payment-detail),
-:global(.app-shell[data-theme='dark'] .calendar-payment-reference) { color: #b2c2bb; }
-:global(.app-shell[data-theme='dark'] .calendar-verify-button) { border-color: #56876a; background: #294b36; color: #d8f3df; }
-:global(.app-shell[data-theme='dark'] .calendar-day-modal .status-pending) { border-color: #806b3e; background: #403821; color: #f0d28d; }
-:global(.app-shell[data-theme='dark'] .calendar-day-modal .status-confirmed) { border-color: #426d55; background: #244231; color: #a4e2ba; }
-:global(.app-shell[data-theme='dark'] .payment-verified) { color: #8bd4a8; }
-:global(.app-shell[data-theme='dark'] .payment-pending) { color: #f0c77b; }
-:global(.app-shell[data-theme='dark'] .payment-rejected) { color: #f0a3a8; }
-:global(.app-shell[data-theme='dark'] .payment-unpaid) { color: #b2c2bb; }
+:global(html[data-theme='dark'] .calendar-day-modal) { border-color: #40534b; background: #1d2b26; color: #e4ede9; }
+:global(html[data-theme='dark'] .calendar-day-modal .modal-heading h2),
+:global(html[data-theme='dark'] .appointment-details-modal .modal-heading h2) { color: #f0f5f2; }
+:global(html[data-theme='dark'] .calendar-day-modal .modal-heading .eyebrow),
+:global(html[data-theme='dark'] .appointment-details-modal .modal-heading .eyebrow) { color: #9cdbb4; }
+:global(html[data-theme='dark'] .calendar-day-modal .modal-heading .muted),
+:global(html[data-theme='dark'] .appointment-details-modal .modal-heading .muted) { color: #b2c2bb; }
+:global(html[data-theme='dark'] .calendar-day-modal .text-button),
+:global(html[data-theme='dark'] .appointment-details-modal .text-button) { color: #9cdbb4; }
+:global(html[data-theme='dark'] .appointment-details-modal) { border-color: #40534b; background: #1d2b26; color: #e4ede9; }
+:global(html[data-theme='dark'] .calendar-day-item) { border-color: #40534b; background: #263630; }
+:global(html[data-theme='dark'] .calendar-day-time) { color: #9cdbb4; }
+:global(html[data-theme='dark'] .calendar-day-time small),
+:global(html[data-theme='dark'] .calendar-day-info span),
+:global(html[data-theme='dark'] .calendar-submitted-date) { color: #b2c2bb; }
+:global(html[data-theme='dark'] .calendar-day-info small) { color: #b2c2bb; }
+:global(html[data-theme='dark'] .calendar-return-tag) { border-color: #6d5b8d; background: #3b3151; color: #e8def8; }
+:global(html[data-theme='dark'] .calendar-day-info .patient-name) { color: #e4ede9; }
+:global(html[data-theme='dark'] .calendar-details-link) { color: #9cdbb4; }
+:global(html[data-theme='dark'] .calendar-payment-detail),
+:global(html[data-theme='dark'] .calendar-payment-reference) { color: #b2c2bb; }
+:global(html[data-theme='dark'] .calendar-verify-button) { border-color: #56876a; background: #294b36; color: #d8f3df; }
+:global(html[data-theme='dark'] .calendar-day-modal .status-pending) { border-color: #806b3e; background: #403821; color: #f0d28d; }
+:global(html[data-theme='dark'] .calendar-day-modal .status-confirmed) { border-color: #426d55; background: #244231; color: #a4e2ba; }
+:global(html[data-theme='dark'] .calendar-day-modal .status-completed) { border-color: #496684; background: #26384d; color: #b8d5f7; }
+:global(html[data-theme='dark'] .calendar-day-modal .status-cancelled) { border-color: #754849; background: #40272a; color: #f0a3a8; }
+:global(html[data-theme='dark'] .calendar-day-modal .status-no_show) { border-color: #65527c; background: #372c45; color: #d0b4ed; }
+:global(html[data-theme='dark'] .payment-verified) { color: #8bd4a8; }
+:global(html[data-theme='dark'] .payment-pending) { color: #f0c77b; }
+:global(html[data-theme='dark'] .payment-rejected) { color: #f0a3a8; }
+:global(html[data-theme='dark'] .payment-unpaid) { color: #b2c2bb; }
+@media (max-width: 760px) {
+  :global(.appointment-modal-backdrop) { place-items: start center; padding: 16px; }
+  .calendar-day-modal, .appointment-details-modal { max-height: calc(100dvh - 32px); }
+  .calendar-day-list { max-height: none; overflow: visible; }
+  .calendar-day-item { grid-template-columns: 70px minmax(0, 1fr); align-items: start; gap: 8px 12px; }
+  .calendar-day-status { grid-column: 2; display: flex; flex-wrap: wrap; align-items: center; justify-items: start; gap: 6px 10px; }
+  .calendar-payment-detail, .calendar-payment-reference { text-align: left; }
+  .appointment-details-modal .appointment-actions { flex-wrap: wrap; }
+}
+@media (max-width: 460px) {
+  :global(.appointment-modal-backdrop) { padding: 12px; }
+  .calendar-day-modal, .appointment-details-modal { max-height: calc(100dvh - 24px); }
+  .calendar-day-item { grid-template-columns: minmax(0, 1fr); }
+  .calendar-day-status { grid-column: 1; }
+  .calendar-verify-button { width: 100%; min-height: 40px; }
+}
 @media (max-width: 650px) {
   :global(.directory-toolbar) {
     display: grid;
@@ -825,14 +1097,60 @@ onBeforeUnmount(() => { calendar?.destroy(); calendar = null })
 :global(.app-shell[data-theme='dark'] .appointment-table .patient-name) { color: #c5e7d6; }
 :global(.app-shell[data-theme='dark'] .appointment-table .table-secondary) { color: #a3b3ae; }
 :global(.app-shell[data-theme='dark'] .appointment-table .row-action) {
-  border-color: #456251;
-  background: #263a30;
-  color: #b9e2cd;
+  border-color: #4d715c;
+  background: #293e33;
+  color: #c5efd3;
 }
 :global(.app-shell[data-theme='dark'] .appointment-table .row-action-danger) {
-  border-color: #754849;
-  background: #40272a;
-  color: #f0a6a6;
+  border-color: #805158;
+  background: #3f282b;
+  color: #ffc1c4;
 }
-@media(max-width:760px){.booking-grid{grid-template-columns:1fr 1fr}.calendar-day-item{grid-template-columns:70px minmax(0,1fr)}.calendar-day-status{grid-column:2;justify-items:start}}@media(max-width:460px){.booking-grid{grid-template-columns:1fr}}
+:global(.app-shell[data-theme='dark'] .appointment-table .row-action:hover) {
+  border-color: #77a987;
+  background: #35513f;
+  color: #f0fff4;
+  text-decoration: none;
+}
+:global(.app-shell[data-theme='dark'] .appointment-table .row-action-danger:hover) {
+  border-color: #9b6269;
+  background: #502f34;
+  color: #ffdadd;
+}
+:global(.app-shell[data-theme='dark'] .appointment-table .row-action:disabled) {
+  border-color: #3d5147;
+  background: #25332d;
+  color: #9aaca5;
+  opacity: 1;
+}
+:global(.app-shell[data-theme='dark'] .appointment-table .row-action:focus-visible) {
+  outline: 2px solid #9ed5b5;
+  outline-offset: 1px;
+}
+:global(.app-shell[data-theme='dark'] .appointment-table .status-pending) {
+  border: 1px solid #806b3e;
+  background: #403821;
+  color: #f0d28d;
+}
+:global(.app-shell[data-theme='dark'] .appointment-table .status-confirmed) {
+  border: 1px solid #426d55;
+  background: #244231;
+  color: #a4e2ba;
+}
+:global(.app-shell[data-theme='dark'] .appointment-table .status-completed) {
+  border: 1px solid #496684;
+  background: #26384d;
+  color: #b8d5f7;
+}
+:global(.app-shell[data-theme='dark'] .appointment-table .status-cancelled) {
+  border: 1px solid #754849;
+  background: #40272a;
+  color: #f0a3a8;
+}
+:global(.app-shell[data-theme='dark'] .appointment-table .status-no_show) {
+  border: 1px solid #65527c;
+  background: #372c45;
+  color: #d0b4ed;
+}
+@media(max-width:760px){.booking-grid{grid-template-columns:1fr 1fr}}@media(max-width:460px){.booking-grid{grid-template-columns:1fr}}
 </style>

@@ -1,25 +1,15 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { RouterLink } from 'vue-router'
-import { ApiError, getApiData, getPortalRole, getStaffUser } from '../services/api'
+import { animate, stagger } from 'animejs'
+import { ApiError, getPortalRole, getStaffUser } from '../services/api'
+import { getCachedPublicOverview, loadPublicOverview, type PublicOverview } from '../services/publicCatalog'
 import UiIcon from '../components/UiIcon.vue'
 import { setTheme } from '../services/theme'
 import orthodonticCareImage from '../assets/orthodontic-care.webp'
 import veneersImage from '../assets/smile-veneers.jpg'
 
-interface ClinicOverview {
-  services: Array<{
-    service_id: number
-    service_name: string
-    category: string | null
-    description: string | null
-    price: string | number
-    duration_min: number | null
-  }>
-  dentists: Array<{ dentist_id: number; specialization: string | null; display_name: string }>
-}
-
-const overview = ref<ClinicOverview | null>(null)
+const overview = ref<PublicOverview | null>(getCachedPublicOverview())
 const signedInUser = ref(getStaffUser())
 const signedInRole = ref(getPortalRole())
 const signedInInitials = computed(() => {
@@ -45,7 +35,7 @@ const accountActionLabel = computed(() =>
     ? 'Verify account'
     : 'Go to dashboard',
 )
-const loading = ref(true)
+const loading = ref(!overview.value)
 const error = ref('')
 const catalogStale = ref(false)
 const darkMode = ref(localStorage.getItem('medicare-theme') === 'dark')
@@ -186,12 +176,50 @@ const mascotMessages = [
   'Keep smiling—you are doing great!',
 ]
 let mascotTimer: number | undefined
+const landingAnimations: ReturnType<typeof animate>[] = []
+
+function animateLandingEntrance() {
+  if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return
+
+  const heroItems = document.querySelectorAll<HTMLElement>(
+    '.public-hero-copy > .eyebrow, .public-hero-copy > h1, .public-hero-copy > .public-actions, .public-hero-copy > .public-trust-points',
+  )
+  if (heroItems.length) {
+    landingAnimations.push(animate(heroItems, {
+      opacity: [0, 1],
+      y: [22, 0],
+      delay: stagger(110),
+      duration: 760,
+      ease: 'outExpo',
+    }))
+  }
+
+  const toolbox = document.querySelector<HTMLElement>('.hero-toolbox')
+  if (toolbox) {
+    landingAnimations.push(animate(toolbox, {
+      opacity: [0, 1],
+      y: [28, 0],
+      scale: [0.97, 1],
+      delay: 220,
+      duration: 900,
+      ease: 'outExpo',
+    }))
+  }
+}
 
 async function loadOverview() {
+  const cachedOverview = getCachedPublicOverview()
+  if (cachedOverview) {
+    overview.value = cachedOverview
+    loading.value = false
+    error.value = ''
+    return
+  }
+
   loading.value = true
   error.value = ''
   try {
-    overview.value = await getApiData<ClinicOverview>('/api/public/overview')
+    overview.value = await loadPublicOverview()
     await nextTick()
     stopScrollObserver()
     stopScrollObserver = observeScrollSections()
@@ -233,14 +261,23 @@ function markCatalogFresh() {
 
 function observeScrollSections() {
   const sections = document.querySelectorAll<HTMLElement>('.scroll-reveal')
-  if (!('IntersectionObserver' in window)) {
+  if (
+    !('IntersectionObserver' in window)
+    || window.matchMedia('(prefers-reduced-motion: reduce)').matches
+  ) {
     sections.forEach((section) => section.classList.add('is-visible'))
     return () => undefined
   }
   const observer = new IntersectionObserver(
     (entries) => {
       entries.forEach((entry) => {
-        entry.target.classList.toggle('is-visible', entry.isIntersecting)
+        const section = entry.target as HTMLElement
+        if (!entry.isIntersecting) {
+          section.classList.remove('is-visible')
+          return
+        }
+
+        section.classList.add('is-visible')
       })
     },
     { threshold: 0.08, rootMargin: '-5% 0px -5% 0px' },
@@ -252,6 +289,7 @@ function observeScrollSections() {
 let stopScrollObserver = () => undefined
 
 onMounted(() => {
+  animateLandingEntrance()
   window.addEventListener('medicare:catalog-stale', markCatalogStale)
   window.addEventListener('medicare:catalog-fresh', markCatalogFresh)
   window.addEventListener('online', loadOverview)
@@ -264,6 +302,8 @@ onBeforeUnmount(() => {
   window.removeEventListener('medicare:catalog-fresh', markCatalogFresh)
   window.removeEventListener('online', loadOverview)
   stopScrollObserver()
+  landingAnimations.forEach((animation) => animation.cancel())
+  landingAnimations.length = 0
   if (mascotTimer !== undefined) window.clearTimeout(mascotTimer)
 })
 

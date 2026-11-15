@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, nextTick, onActivated, onBeforeUnmount, onMounted, ref } from 'vue'
 import { RouterLink } from 'vue-router'
 import { ApiError, getApiData } from '../services/api'
 import UiIcon from '../components/UiIcon.vue'
@@ -57,7 +57,7 @@ const statusCanvas = ref<HTMLCanvasElement | null>(null)
 const activityCanvas = ref<HTMLCanvasElement | null>(null)
 const revenueCanvas = ref<HTMLCanvasElement | null>(null)
 const serviceCanvas = ref<HTMLCanvasElement | null>(null)
-let charts: { destroy(): void }[] = []
+let charts: { destroy(): void; resize?: () => void }[] = []
 
 function chartTheme() {
   const styles = getComputedStyle(document.documentElement)
@@ -183,6 +183,9 @@ onMounted(async () => {
     await nextTick()
     renderCharts()
   }
+})
+onActivated(() => {
+  if (charts.length) void nextTick().then(() => charts.forEach((chart) => chart.resize?.()))
 })
 
 onBeforeUnmount(() => {

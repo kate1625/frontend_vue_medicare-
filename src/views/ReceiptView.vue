@@ -13,7 +13,7 @@ async function loadPdf() {
   const mod = await import('jspdf')
   return mod.default
 }
-interface Receipt { payment_id: number; receipt_no: string; amount: string; payment_plan: 'full'|'downpayment'; payment_percent: number|null; reference_no: string | null; status: string; paid_at: string | null; method_name: string; account_name: string | null; account_no: string | null; appt_date: string; appt_time: string; service_name: string; first_name: string; last_name: string }
+interface Receipt { payment_id: number; receipt_no: string | null; amount: string; payment_plan: 'full'|'downpayment'; payment_percent: number|null; reference_no: string | null; status: string; paid_at: string | null; method_name: string; account_name: string | null; account_no: string | null; appt_date: string; appt_time: string; service_name: string; first_name: string; last_name: string }
 const route = useRoute(); const receipt = ref<Receipt | null>(null); const receipts = ref<Receipt[]>([]); const qr = ref(''); const loading = ref(true); const error = ref('')
 async function load() { loading.value = true; error.value = ''; receipt.value = null; receipts.value = []; qr.value = ''; const id = String(route.query.id || ''); try { if (/^\d+$/.test(id)) { receipt.value = await getApiData<Receipt>(`/api/payments/receipt/${id}`) } else { receipts.value = await getApiData<Receipt[]>('/api/payments/mine'); return } const QRCode = await loadQr()
 qr.value = await QRCode.toDataURL(
@@ -21,8 +21,10 @@ qr.value = await QRCode.toDataURL(
   { width: 180, margin: 1 },
 ) } catch (cause) { error.value = cause instanceof ApiError ? cause.message : 'Could not load receipts.' } finally { loading.value = false } }
 async function exportPdf() {
-  if (!receipt.value) return
+  if (!receipt.value || receipt.value.status !== 'verified') return
   const r = receipt.value
+  const receiptNo = r.receipt_no
+  if (!receiptNo) return
   const jsPDF = await loadPdf()
   const pdf = new jsPDF({ unit: 'mm', format: 'a4' })
   const pageWidth = pdf.internal.pageSize.getWidth()
@@ -30,8 +32,8 @@ async function exportPdf() {
   const contentWidth = pageWidth - margin * 2
   const amount = Number(r.amount).toLocaleString('en-PH', { minimumFractionDigits: 2 })
   const plan = r.payment_plan === 'downpayment' ? `${r.payment_percent}% downpayment` : 'Full payment'
-  const status = r.status === 'pending' ? 'PENDING VERIFICATION' : r.status.toUpperCase()
-  const statusColor: [number, number, number] = r.status === 'verified' ? [36, 124, 86] : r.status === 'rejected' ? [178, 62, 62] : [157, 111, 29]
+  const status = 'VERIFIED'
+  const statusColor: [number, number, number] = [36, 124, 86]
 
   pdf.setFillColor(25, 74, 78)
   pdf.rect(0, 0, pageWidth, 46, 'F')
@@ -48,8 +50,8 @@ async function exportPdf() {
   pdf.setTextColor(208, 235, 226)
   pdf.text('OFFICIAL PAYMENT RECEIPT', margin + 16, 25)
   pdf.setFontSize(10)
-  pdf.text(r.receipt_no, pageWidth - margin, 18, { align: 'right' })
-  pdf.text(`Issued ${r.paid_at || 'pending verification'}`, pageWidth - margin, 25, { align: 'right' })
+  pdf.text(receiptNo, pageWidth - margin, 18, { align: 'right' })
+  pdf.text(`Issued ${r.paid_at || 'verified'}`, pageWidth - margin, 25, { align: 'right' })
 
   pdf.setTextColor(38, 57, 68)
   pdf.setFont('helvetica', 'bold')
@@ -92,7 +94,7 @@ async function exportPdf() {
   pdf.setFont('helvetica', 'normal')
   pdf.setFontSize(10)
   pdf.setTextColor(76, 94, 103)
-  pdf.text('Amount submitted', margin + 10, summaryTop + 23)
+  pdf.text('Amount paid', margin + 10, summaryTop + 23)
   pdf.setFont('helvetica', 'bold')
   pdf.setFontSize(22)
   pdf.setTextColor(25, 106, 83)
@@ -123,11 +125,11 @@ async function exportPdf() {
   pdf.line(margin, 278, pageWidth - margin, 278)
   pdf.setFontSize(8)
   pdf.setTextColor(118, 135, 140)
-  pdf.text('This receipt confirms the payment submission recorded by Tooth Doctor Dental Clinic.', margin, 287)
+  pdf.text('This receipt confirms payment verified by Tooth Doctor Dental Clinic.', margin, 287)
   pdf.text('MediCare+ patient portal', margin, 294)
   pdf.setTextColor(25, 106, 83)
-  pdf.text(r.receipt_no, pageWidth - margin, 294, { align: 'right' })
-  pdf.save(`${r.receipt_no}.pdf`)
+  pdf.text(receiptNo, pageWidth - margin, 294, { align: 'right' })
+  pdf.save(`${receiptNo}.pdf`)
 }
 onMounted(load); watch(() => route.query.id, load)
 </script>
@@ -135,11 +137,10 @@ onMounted(load); watch(() => route.query.id, load)
   <div class="receipt-page">
     <section class="page-heading receipt-page-heading">
       <div>
-        <p class="eyebrow">PAYMENTS &amp; RECORDS</p>
         <h1>Payment Receipts</h1>
-        <p class="muted">View your submitted payments, verification status, and downloadable receipts.</p>
+        <p class="muted">Official receipts appear after payment is verified. For cash, the clinic releases the receipt when payment is received during your visit.</p>
       </div>
-      <button v-if="receipt" class="button button-primary" @click="exportPdf">Download PDF</button>
+      <button v-if="receipt?.status === 'verified'" class="button button-primary" @click="exportPdf">Download PDF</button>
     </section>
 
     <SkeletonLoader v-if="loading" variant="receipt" label="Loading your payment receipts" />
@@ -153,7 +154,7 @@ onMounted(load); watch(() => route.query.id, load)
         <div>
           <p class="payment-step">PAYMENT HISTORY</p>
           <h2>Your receipts</h2>
-          <p>Select a receipt to view the full details and download a PDF copy.</p>
+          <p>Only verified payments have official receipts available to view and download.</p>
         </div>
         <RouterLink class="button button-quiet" to="/patient/payment">Make a payment</RouterLink>
       </div>
@@ -173,16 +174,20 @@ onMounted(load); watch(() => route.query.id, load)
             {{ item.status === 'pending' ? 'Pending verification' : item.status }}
           </span>
           <RouterLink
+            v-if="item.status === 'verified' && item.receipt_no"
             class="receipt-view-link"
             :to="{ path: '/patient/receipt', query: { id: item.payment_id } }"
           >
             View receipt <span aria-hidden="true">→</span>
           </RouterLink>
+          <span v-else class="receipt-unavailable">
+            {{ item.status === 'pending' ? 'Available after clinic confirmation' : 'No receipt issued' }}
+          </span>
         </article>
       </div>
       <div v-else class="empty-state">
         <strong>No payment receipts yet</strong>
-        <p>After you submit a payment, its receipt will appear here immediately.</p>
+        <p>An official receipt will appear here after the clinic verifies payment.</p>
         <RouterLink to="/patient/payment">Go to payments</RouterLink>
       </div>
     </section>
@@ -196,7 +201,7 @@ onMounted(load); watch(() => route.query.id, load)
           {{ receipt.status === 'pending' ? 'Pending clinic verification' : receipt.status }}
         </span>
       </div>
-      <p class="receipt-detail-note">Keep this receipt for your records. The clinic will update the status after confirming the payment.</p>
+      <p class="receipt-detail-note">This official receipt confirms a payment verified by the clinic. Keep it for your records.</p>
       <dl>
         <dt>Patient</dt><dd>{{ receipt.first_name }} {{ receipt.last_name }}</dd>
         <dt>Service</dt><dd>{{ receipt.service_name }}</dd>
@@ -217,27 +222,28 @@ onMounted(load); watch(() => route.query.id, load)
 
 <style scoped>
 .receipt-page {
-  width: min(1120px, 100%);
-  margin: 0 auto;
+  width: 100%;
   padding-bottom: 48px;
 }
 
 .receipt-page-heading {
-  align-items: flex-end;
-  margin-bottom: 28px;
+  align-items: center;
+  margin-bottom: 23px;
 }
 
 .receipt-page-heading h1 {
-  margin: 7px 0 8px;
-  color: #173b58;
-  font-size: clamp(28px, 3vw, 40px);
+  margin: 6px 0 5px;
+  color: #223951;
+  font-size: clamp(25px, 2.4vw, 31px);
+  font-weight: 720;
   letter-spacing: -.8px;
+  line-height: 1.2;
 }
 
 .receipt-page-heading .muted {
   max-width: 620px;
-  color: #5b7182;
-  font-size: 15px;
+  color: #5f6e82;
+  font-size: 14px;
 }
 
 .receipt-list-panel,
@@ -348,6 +354,13 @@ onMounted(load); watch(() => route.query.id, load)
   font-size: 17px;
 }
 
+.receipt-unavailable {
+  color: #74837d;
+  font-size: 12px;
+  font-weight: 650;
+  text-align: right;
+}
+
 .receipt-detail {
   width: min(840px, 100%);
   margin-inline: auto;
@@ -435,7 +448,8 @@ onMounted(load); watch(() => route.query.id, load)
   }
 
   .receipt-list-item .status-badge,
-  .receipt-view-link {
+  .receipt-view-link,
+  .receipt-unavailable {
     grid-column: 2;
     justify-self: start;
   }
@@ -514,6 +528,10 @@ onMounted(load); watch(() => route.query.id, load)
 
 :global(.app-shell[data-theme='dark'] .receipt-view-link) {
   color: #9cdbb4;
+}
+
+:global(.app-shell[data-theme='dark'] .receipt-unavailable) {
+  color: #b2c2bb;
 }
 
 :global(.app-shell[data-theme='dark'] .receipt-view-link:hover) {

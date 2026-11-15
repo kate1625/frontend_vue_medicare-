@@ -3,6 +3,7 @@ import { onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ApiError, getPortalRole, signIn } from '../services/api'
 import UiIcon from '../components/UiIcon.vue'
+import { notify } from '../services/toast'
 
 const identity = ref('')
 const password = ref('')
@@ -63,12 +64,14 @@ async function submit() {
   pending.value = true
   try {
     const user = await signIn(identity.value.trim(), password.value)
+    notify.success('You are now signed in to your account.', 'Welcome back')
     const role = getPortalRole()
     const defaultPortal = role === 'patient' ? '/patient/dashboard' : role === 'admin' ? '/admin/dashboard' : '/staff/dashboard'
     const redirect = typeof route.query.redirect === 'string' ? route.query.redirect : defaultPortal
     await router.replace(role === 'patient' && !user.is_verified ? '/settings/profile' : redirect)
   } catch (cause) {
     error.value = cause instanceof ApiError ? cause.message : 'Unable to sign in. Please try again.'
+    notify.error(error.value, 'Sign-in failed')
   } finally {
     pending.value = false
   }

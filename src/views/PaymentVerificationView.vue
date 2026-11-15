@@ -86,20 +86,24 @@ async function setStatus(row: PendingPayment, status: 'verified' | 'rejected') {
   actionError.value = ''
   message.value = ''
   try {
+    let emailSent: boolean | undefined
     if (status === 'verified' && row.verification_source === 'paymongo') {
-      const result = await apiRequest<{ data: { status: string }; message: string }>('/api/payments/paymongo/confirm', {
+      const result = await apiRequest<{ data: { status: string; email_sent: boolean }; message: string }>('/api/payments/paymongo/confirm', {
         method: 'POST',
         body: JSON.stringify({ payment_id: row.payment_id, verify: true }),
       })
       message.value = result.message
+      emailSent = result.data.email_sent
     } else {
-      await apiRequest(`/api/payments/${row.payment_id}/status`, {
+      const result = await apiRequest<{ data: { email_sent: boolean }; message: string }>(`/api/payments/${row.payment_id}/status`, {
         method: 'POST',
         body: JSON.stringify({ status }),
       })
-      message.value = `Payment #${row.payment_id} ${status}.`
+      message.value = result.message
+      emailSent = result.data.email_sent
     }
-    notify.success(message.value, status === 'verified' ? 'Payment verified' : 'Payment rejected')
+    if (emailSent === false) notify.warning(message.value, 'Payment updated, email not sent')
+    else notify.success(message.value, status === 'verified' ? 'Payment verified' : 'Payment rejected')
     await load()
   } catch (error) {
     actionError.value = error instanceof ApiError ? error.message : 'Could not update payment.'
@@ -131,7 +135,7 @@ onMounted(load)
 <template>
   <div class="payment-verification-page">
     <!-- Page Header -->
-    <section class="page-header">
+    <section class="page-heading page-header">
       <div class="header-left">
         <h1>Payment Verification</h1>
         <p class="subtitle">Review and process patient transactions</p>
@@ -301,7 +305,7 @@ onMounted(load)
           >
             <span v-if="busy === row.payment_id" class="payment-action-spinner" aria-hidden="true"></span>
             <UiIcon v-else name="check" />
-            {{ busy === row.payment_id ? (row.verification_source === 'paymongo' ? 'Checking…' : 'Verifying…') : row.verification_source === 'paymongo' ? 'Verify completed test payment' : 'Verify Payment' }}
+            {{ busy === row.payment_id ? (row.verification_source === 'paymongo' ? 'Checking…' : 'Verifying…') : row.verification_source === 'paymongo' ? 'Verify completed test payment' : row.method_name.toLowerCase() === 'cash' ? 'Confirm cash received' : 'Verify Payment' }}
           </button>
           <button 
             class="btn btn-reject"
@@ -370,7 +374,7 @@ onMounted(load)
                   class="btn-sm btn-verify-sm"
                   :disabled="busy === row.payment_id"
                   @click="setStatus(row, 'verified')"
-                  :title="row.verification_source === 'paymongo' ? 'Verify completed test payment' : 'Verify payment'"
+                  :title="row.verification_source === 'paymongo' ? 'Verify completed test payment' : row.method_name.toLowerCase() === 'cash' ? 'Confirm only after collecting cash from the patient' : 'Verify payment'"
                 >
                   <span v-if="busy === row.payment_id" class="payment-action-spinner payment-action-spinner-small" aria-hidden="true"></span>
                   <UiIcon v-else name="check" />
@@ -400,32 +404,30 @@ onMounted(load)
 
 .payment-verification-page {
   font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-  padding: 2rem;
-  background: #F8FAFC;
-  min-height: calc(100vh - 66px);
+  padding: 0;
+  background: transparent;
 }
 
 .page-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  margin-bottom: 2rem;
+  align-items: center;
+  margin-bottom: 23px;
   flex-wrap: wrap;
-  gap: 1rem;
+  gap: 20px;
 }
 
 .header-left h1 {
-  font-size: 1.875rem;
-  font-weight: 700;
-  color: #0f172a;
-  margin: 0 0 0.25rem 0;
-  letter-spacing: -0.025em;
+  font-size: clamp(25px, 2.4vw, 31px);
+  font-weight: 720;
+  color: #223951;
+  margin: 6px 0 5px;
+  letter-spacing: -0.8px;
+  line-height: 1.2;
 }
 
 .subtitle {
-  color: #64748b;
+  color: #5f6e82;
   margin: 0;
-  font-size: 0.875rem;
+  font-size: 14px;
 }
 
 .header-right {
@@ -1246,7 +1248,7 @@ onMounted(load)
 }
 
 @media (max-width: 768px) {
-  .payment-verification-page { padding: 1rem; }
+  .payment-verification-page { padding: 0; }
   .header-right { width: 100%; }
   .search-input { width: 100%; }
   .cards-grid { grid-template-columns: 1fr; }

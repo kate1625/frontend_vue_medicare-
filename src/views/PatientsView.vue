@@ -146,6 +146,91 @@ function formatDate(value: string) {
   return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium' }).format(new Date(value))
 }
 
+function escapeHtml(value: string) {
+  const escapedCharacters: Record<string, string> = {
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#39;',
+  }
+  return value.replace(/[&<>"']/g, (character) => escapedCharacters[character] ?? character)
+}
+
+function printRecords(records: Patient[]) {
+  if (!records.length) return
+
+  const printWindow = window.open('', '_blank', 'width=900,height=700')
+  if (!printWindow) {
+    notify.error('Allow pop-ups to print patient records.', 'Print window blocked')
+    return
+  }
+
+  printWindow.opener = null
+  const patientPages = records.map((patient) => {
+    const fullName = `${patient.first_name} ${patient.last_name}`
+    const details: Array<[string, string]> = [
+      ['Patient number', `#${patient.id}`],
+      ['First name', patient.first_name],
+      ['Last name', patient.last_name],
+      ['Email', patient.email || '—'],
+      ['Phone', patient.phone || '—'],
+      ['Date of birth', patient.date_of_birth ? formatDate(patient.date_of_birth) : '—'],
+      ['Gender', patient.gender || '—'],
+      ['Address', patient.address || '—'],
+      ['Status', patient.status],
+      ['Record created', formatDate(patient.created_at)],
+      ['Last updated', patient.updated_at ? formatDate(patient.updated_at) : '—'],
+    ]
+
+    return `<article class="patient-record">
+      <h2>${escapeHtml(fullName)}</h2>
+      <table><tbody>${details.map(([label, value]) => `<tr><th>${escapeHtml(label)}</th><td>${escapeHtml(value)}</td></tr>`).join('')}</tbody></table>
+    </article>`
+  }).join('')
+
+  const singlePatient = records.length === 1 ? records[0] : undefined
+  const documentTitle = singlePatient
+    ? `Patient Record - ${singlePatient.first_name} ${singlePatient.last_name}`
+    : 'Patient Records'
+
+  printWindow.document.open()
+  printWindow.document.write(`<!doctype html>
+    <html lang="en">
+      <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <title>${escapeHtml(documentTitle)}</title>
+        <style>
+          * { box-sizing: border-box; }
+          body { margin: 0; padding: 32px; color: #1f2933; font: 14px/1.5 Arial, sans-serif; }
+          header { margin-bottom: 24px; border-bottom: 2px solid #23836c; padding-bottom: 14px; }
+          h1 { margin: 0; color: #174e42; font-size: 24px; }
+          header p { margin: 5px 0 0; color: #52615b; }
+          .patient-record { break-inside: avoid; page-break-inside: avoid; }
+          .patient-record + .patient-record { break-before: page; page-break-before: always; }
+          h2 { margin: 0 0 12px; font-size: 19px; }
+          table { width: 100%; border-collapse: collapse; }
+          th, td { width: 50%; border: 1px solid #d5ded9; padding: 9px 12px; text-align: left; vertical-align: top; }
+          th { background: #f1f6f3; font-weight: 600; }
+          @page { margin: 16mm; }
+          @media print { body { padding: 0; } }
+        </style>
+      </head>
+      <body>
+        <header>
+          <h1>${escapeHtml(records.length === 1 ? 'Patient Record' : 'Patient Records')}</h1>
+          <p>Printed ${escapeHtml(formatDate(new Date().toISOString()))} · ${records.length} ${records.length === 1 ? 'record' : 'records'}</p>
+        </header>
+        ${patientPages}
+      </body>
+    </html>`)
+  printWindow.document.close()
+  printWindow.onafterprint = () => printWindow.close()
+  printWindow.focus()
+  window.setTimeout(() => printWindow.print(), 150)
+}
+
 onMounted(() => {
   canManagePatients.value = ['staff', 'admin'].includes(getPortalRole() ?? '')
   void loadPatients()
@@ -160,14 +245,14 @@ onMounted(() => {
       <h1>Patients</h1>
       <p class="muted">View and manage patient contact records.</p>
     </div>
-    <button v-if="canManagePatients" class="button button-primary" type="button" @click="openCreate">
-      <UiIcon name="plus" /> Add patient
+    <button class="button button-quiet" type="button" :disabled="loading || !patients.length" @click="printRecords(patients)">
+      <UiIcon name="file" /> Print all records
     </button>
   </section>
 
   <div v-if="error && !formOpen" class="alert alert-error" role="alert">{{ error }}</div>
 
-  <section class="surface directory-panel">
+  <section class="surface directory-panel patient-directory">
     <div class="directory-toolbar">
       <label class="search-field">
         <span class="search-icon"><UiIcon name="search" /></span>
@@ -208,7 +293,7 @@ onMounted(() => {
             <td><span class="status-badge" :class="`status-${patient.status}`">{{ patient.status }}</span></td>
             <td class="actions-cell">
               <RouterLink class="row-action" :to="`/patients/${patient.id}`">View</RouterLink>
-              <RouterLink class="row-action" :to="`/patients/${patient.id}`">History</RouterLink>
+              <button class="row-action" type="button" :aria-label="`Print ${patient.first_name} ${patient.last_name}'s record`" @click="printRecords([patient])">Print</button>
               <template v-if="canManagePatients">
                 <button class="row-action" type="button" @click="openEdit(patient)">Edit</button>
                 <button class="row-action row-action-danger" type="button" @click="removePatient(patient)">Delete</button>

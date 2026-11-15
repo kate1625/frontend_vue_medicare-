@@ -442,14 +442,34 @@ onMounted(load)
 .prescription-overview { min-height: 260px; }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; }
 
-:global(:root[data-theme='dark']) .patient-avatar { background: #294337; color: #9bd0ad; }
-:global(:root[data-theme='dark']) .status-active,
-:global(:root[data-theme='dark']) .status-completed { background: #294337; color: #a9d8b8; }
-:global(:root[data-theme='dark']) .status-confirmed { background: #2b3d4c; color: #b6d2e8; }
-:global(:root[data-theme='dark']) .status-pending,
-:global(:root[data-theme='dark']) .status-review { background: #4a3d2c; color: #efd09a; }
-:global(:root[data-theme='dark']) .status-cancelled,
-:global(:root[data-theme='dark']) .status-no_show { background: #482f30; color: #e6aeae; }
+:global(.app-shell[data-theme='dark'] .prescription-workspace .patient-avatar) {
+  border: 1px solid #426d55;
+  background: #294337;
+  color: #9bd0ad;
+}
+:global(.app-shell[data-theme='dark'] .prescription-workspace .status-active),
+:global(.app-shell[data-theme='dark'] .prescription-workspace .status-completed) {
+  border: 1px solid #426d55;
+  background: #244231;
+  color: #a9d8b8;
+}
+:global(.app-shell[data-theme='dark'] .prescription-workspace .status-confirmed) {
+  border: 1px solid #496684;
+  background: #26384d;
+  color: #b6d2e8;
+}
+:global(.app-shell[data-theme='dark'] .prescription-workspace .status-pending),
+:global(.app-shell[data-theme='dark'] .prescription-workspace .status-review) {
+  border: 1px solid #806b3e;
+  background: #403821;
+  color: #f0d28d;
+}
+:global(.app-shell[data-theme='dark'] .prescription-workspace .status-cancelled),
+:global(.app-shell[data-theme='dark'] .prescription-workspace .status-no_show) {
+  border: 1px solid #754849;
+  background: #40272a;
+  color: #f0a3a8;
+}
 
 @media (max-width: 850px) {
   .prescription-layout { grid-template-columns: minmax(0, 1fr); }

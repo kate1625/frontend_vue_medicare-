@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, nextTick, onActivated, onBeforeUnmount, onMounted, ref } from 'vue'
 import { getApiData } from '../services/api'
 import UiIcon from '../components/UiIcon.vue'
 import SkeletonLoader from '../components/SkeletonLoader.vue'
@@ -80,7 +80,7 @@ const data = ref<DashboardData | null>(null)
 const loading = ref(true)
 const error = ref('')
 const chartCanvas = ref<HTMLCanvasElement | null>(null)
-let historyChart: { destroy(): void } | null = null
+let historyChart: { destroy(): void; resize?: () => void } | null = null
 const upcoming = computed(() => data.value?.upcoming_appointments ?? [])
 function money(amount: number | string) { return new Intl.NumberFormat('en-PH', { style: 'currency', currency: 'PHP' }).format(Number(amount) || 0) }
 function parseDate(value: string) {
@@ -148,6 +148,9 @@ async function loadDashboard() {
 onMounted(() => {
   window.addEventListener('medicare:theme-change', onThemeChange)
   void loadDashboard()
+})
+onActivated(() => {
+  if (historyChart?.resize) void nextTick().then(() => historyChart?.resize?.())
 })
 onBeforeUnmount(() => {
   window.removeEventListener('medicare:theme-change', onThemeChange)

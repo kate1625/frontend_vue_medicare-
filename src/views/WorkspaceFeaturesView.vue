@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref } from 'vue'
 import { ApiError, apiRequest, getApiData, getPortalRole, getStaffUser } from '../services/api'
 import { useRoute } from 'vue-router'
 import SkeletonLoader from '../components/SkeletonLoader.vue'
@@ -22,6 +22,7 @@ interface TreatmentRow {
   diagnosis: string | null
   treatment_done: string | null
   follow_up_date: string | null
+  follow_up_time: string | null
   created_at: string
 }
 interface PrescriptionRow {
@@ -54,7 +55,6 @@ interface MessageContact {
   last_message_at: string | null
 }
 interface MessagesResponse { messages: MessageRow[]; contacts: MessageContact[] }
-interface ToothChartRow { tooth_no: string; condition_name: string }
 interface ClinicSettings {
   clinic_name: string
   clinic_hours: string
@@ -89,11 +89,7 @@ const selectedMessages = computed(() => messages.value
 const sendingMessage = ref(false)
 let temporaryMessageId = -1
 let messageRefreshTimer: number | null = null
-const chartPatients = ref<PatientRow[]>([])
-const chartPatient = ref('')
-const selectedTooth = ref('')
-const toothMap = ref<Record<string, string>>({})
-const toothCondition = ref('')
+let messagesPageActive = false
 const form = ref<WorkspaceForm>({})
 const settings = ref<ClinicSettings>({
   clinic_name: 'MediCare+ Dental Clinic',
@@ -109,7 +105,6 @@ async function load(){ loading.value=true; error.value=''; try {
     dentists.value = scheduleRows.filter(
       (d, i, all) => all.findIndex(x => x.dentist_id === d.dentist_id) === i,
     )
-    chartPatients.value = await getApiData<PatientRow[]>('/api/patients')
   }
   if (kind.value === 'prescriptions') {
     prescriptionRows.value = await getApiData<PrescriptionRow[]>('/api/prescriptions')
@@ -125,17 +120,51 @@ async function load(){ loading.value=true; error.value=''; try {
     }
   }
  }catch(e){error.value=e instanceof ApiError?e.message:'Could not load this workspace section.'}finally{loading.value=false} }
-async function save(){busy.value=true;error.value='';success.value='';try{
- let followUpNotificationSent=false;const hasFollowUpDate=kind.value==='records'&&Boolean(form.value.follow_up_date)
- if(kind.value==='records'){const result=await apiRequest<{data:{notification_sent:boolean}}>('/api/treatment-records',{method:'POST',body:JSON.stringify(form.value)});followUpNotificationSent=result.data.notification_sent}
- if(kind.value==='prescriptions') await apiRequest('/api/prescriptions',{method:'POST',body:JSON.stringify(form.value)})
- if(kind.value==='settings') await apiRequest('/api/settings',{method:'PUT',body:JSON.stringify(settings.value)})
- form.value={};success.value=kind.value==='settings'?'Clinic settings saved.':hasFollowUpDate?(followUpNotificationSent?'Dental record and recommended return date saved. The patient was notified in MediCare+.':'Dental record and recommended return date saved. No in-app notification was sent because the patient account is not linked.'):'Saved successfully.';notify.success(success.value, kind.value==='settings'?'Settings saved':'Record saved');await load()
- }catch(e){error.value=e instanceof ApiError?e.message:'Could not save changes.';notify.error(error.value,'Changes not saved')}finally{busy.value=false}}
-async function loadChart(){toothMap.value={};selectedTooth.value='';toothCondition.value='';if(!chartPatient.value)return;try{const data=await getApiData<ToothChartRow[]>(`/api/patients/${chartPatient.value}/tooth-chart`);toothMap.value=Object.fromEntries(data.map(x=>[x.tooth_no,x.condition_name]))}catch(e){error.value=e instanceof ApiError?e.message:'Could not load the tooth chart.'}}
-async function saveTooth(){if(!chartPatient.value||!selectedTooth.value)return;busy.value=true;error.value='';try{await apiRequest(`/api/patients/${chartPatient.value}/tooth-chart`,{method:'PUT',body:JSON.stringify({tooth_no:selectedTooth.value,condition_name:toothCondition.value})});toothMap.value={...toothMap.value,[selectedTooth.value]:toothCondition.value};success.value=`Tooth ${selectedTooth.value} updated.`;notify.success(success.value,'Tooth chart updated')}catch(e){error.value=e instanceof ApiError?e.message:'Could not update the tooth chart.';notify.error(error.value,'Tooth chart not updated')}finally{busy.value=false}}
+async function save(){
+ busy.value=true;error.value='';success.value=''
+ if(kind.value==='records'&&Boolean(form.value.follow_up_date)!==Boolean(form.value.follow_up_time)){
+  error.value='Choose both a return date and time, or leave both fields blank.'
+  busy.value=false
+  return
+ }
+ try{
+  let returnNotifications:{patient:boolean;dentist:boolean}|undefined
+  if(kind.value==='records'){
+   const result=await apiRequest<{data:{return_notifications:{patient:boolean;dentist:boolean}}}>('/api/treatment-records',{method:'POST',body:JSON.stringify(form.value)})
+   returnNotifications=result.data.return_notifications
+  }
+  if(kind.value==='prescriptions') await apiRequest('/api/prescriptions',{method:'POST',body:JSON.stringify(form.value)})
+  if(kind.value==='settings') await apiRequest('/api/settings',{method:'PUT',body:JSON.stringify(settings.value)})
+  const hasReturn=kind.value==='records'&&Boolean(form.value.follow_up_date)
+  form.value={}
+  success.value=kind.value==='settings'
+   ?'Clinic settings saved.'
+   :kind.value==='records'
+     ?hasReturn&&returnNotifications?.patient&&returnNotifications.dentist
+       ?'Treatment record saved. The patient and dentist were notified of the return visit.'
+       :hasReturn
+         ?`Treatment record saved. Return visit status: ${returnNotifications?.patient ? 'patient calendar updated and patient notified' : 'patient account unavailable'}; ${returnNotifications?.dentist ? 'dentist notified' : 'dentist account unavailable'}.`
+         :'Treatment record saved. The patient can view it in Profile & Medical History.'
+     :'Saved successfully.'
+  notify.success(success.value, kind.value==='settings'?'Settings saved':'Record saved')
+  await load()
+ }catch(e){error.value=e instanceof ApiError?e.message:'Could not save changes.';notify.error(error.value,'Changes not saved')}finally{busy.value=false}
+}
 function contactInitials(username: string) {
   return username.trim().split(/[\s._-]+/).filter(Boolean).slice(0, 2).map((part) => part.charAt(0).toUpperCase()).join('') || 'U'
+}
+function startMessageRefresh() {
+  if (!messagesPageActive || kind.value !== 'messages' || loading.value || messageRefreshTimer !== null) return
+  messageRefreshTimer = window.setInterval(() => {
+    void refreshMessages().catch((cause: unknown) => {
+      error.value = cause instanceof ApiError ? cause.message : 'Could not refresh messages.'
+    })
+  }, 5000)
+}
+function stopMessageRefresh() {
+  if (messageRefreshTimer === null) return
+  window.clearInterval(messageRefreshTimer)
+  messageRefreshTimer = null
 }
 function refreshProfilePictures() {
   const userIds = new Set<number>([
@@ -208,9 +237,30 @@ async function refreshMessages(loadContacts = false) {
   const response = await getApiData<MessagesResponse>('/api/messages')
   const pendingMessages = messages.value.filter((message) => message.delivery_status === 'sending')
   messages.value = [...pendingMessages, ...response.messages]
+  const latestMessagesByContact = new Map<number, MessageRow>()
+  const unreadCountsByContact = new Map<number, number>()
+  for (const message of response.messages) {
+    const senderId = Number(message.sender_id)
+    const recipientId = Number(message.recipient_id)
+    const contactId = senderId === currentUserId ? recipientId : senderId
+    if (!latestMessagesByContact.has(contactId)) latestMessagesByContact.set(contactId, message)
+    if (recipientId === currentUserId && Number(message.is_read) === 0) {
+      unreadCountsByContact.set(contactId, (unreadCountsByContact.get(contactId) ?? 0) + 1)
+    }
+  }
   messageContacts.value = patientMode
     ? response.contacts.filter((contact) => ['Staff', 'Admin'].includes(contact.role_name))
     : response.contacts
+  messageContacts.value = messageContacts.value.map((contact) => {
+    const latestMessage = latestMessagesByContact.get(contact.user_id)
+    return {
+      ...contact,
+      unread_count: unreadCountsByContact.get(contact.user_id) ?? 0,
+      last_message: latestMessage?.body ?? null,
+      last_message_sender_id: latestMessage ? Number(latestMessage.sender_id) : null,
+      last_message_at: latestMessage?.created_at ?? null,
+    }
+  })
   refreshProfilePictures()
   if (loadContacts || !messageContacts.value.some((contact) => contact.user_id === selectedContactId.value)) {
     selectedContactId.value = messageContacts.value[0]?.user_id ?? null
@@ -232,7 +282,7 @@ async function refreshMessages(loadContacts = false) {
     )
     messageContacts.value = messageContacts.value.map((contact) =>
       contact.user_id === peerId
-        ? { ...contact, unread_count: 0, last_message_sender_id: currentUserId ?? null }
+        ? { ...contact, unread_count: 0 }
         : contact,
     )
   }
@@ -246,21 +296,16 @@ async function selectContact(contactId:number){
     error.value = cause instanceof ApiError ? cause.message : 'Could not refresh this conversation.'
   }
 }
-const upperTeeth=[18,17,16,15,14,13,12,11,21,22,23,24,25,26,27,28], lowerTeeth=[48,47,46,45,44,43,42,41,31,32,33,34,35,36,37,38]
 onMounted(async()=>{
   window.addEventListener('medicare:profile-picture-change', handleProfilePictureChange)
   window.addEventListener('storage', handleProfilePictureStorageChange)
   await load()
-  if (kind.value === 'messages') {
-    messageRefreshTimer = window.setInterval(() => {
-      void refreshMessages().catch((cause: unknown) => {
-        error.value = cause instanceof ApiError ? cause.message : 'Could not refresh messages.'
-      })
-    }, 5000)
-  }
+  startMessageRefresh()
 })
+onActivated(() => { messagesPageActive = true; startMessageRefresh() })
+onDeactivated(() => { messagesPageActive = false; stopMessageRefresh() })
 onBeforeUnmount(() => {
-  if (messageRefreshTimer !== null) window.clearInterval(messageRefreshTimer)
+  stopMessageRefresh()
   window.removeEventListener('medicare:profile-picture-change', handleProfilePictureChange)
   window.removeEventListener('storage', handleProfilePictureStorageChange)
 })
@@ -277,7 +322,36 @@ onBeforeUnmount(() => {
   />
   <template v-else>
     <section v-if="kind==='settings'" class="surface feature-state"><h2>Clinic preferences</h2><p class="muted">These settings control the clinic name shown in the workspace and the default appointment length used when a service has no duration configured. Dentist availability still controls which times can be booked.</p><div class="form-grid"><label>Clinic name<input v-model="settings.clinic_name"></label><label>Clinic hours<input v-model="settings.clinic_hours"></label><label>Default appointment duration<select v-model="settings.appointment_duration"><option value="30">30 minutes</option><option value="45">45 minutes</option><option value="60">60 minutes</option></select></label></div><button class="button button-primary" :disabled="busy" @click="save">Save settings</button></section>
-    <template v-else-if="kind==='records'"><section class="surface feature-state dental-records"><h2>Add dental record</h2><div class="form-grid"><label>Appointment<select v-model.number="form.appointment_id"><option value="">Choose appointment</option><option v-for="a in appointments" :key="a.appointment_id" :value="a.appointment_id">#{{a.appointment_id}} · {{a.patient}} · {{a.service_name}} · {{a.appt_date}}</option></select></label><label>Dentist<select v-model.number="form.dentist_id"><option value="">Choose dentist</option><option v-for="d in dentists" :key="d.dentist_id" :value="d.dentist_id">{{d.username}} ({{d.specialization}})</option></select></label><label>Tooth number<input v-model="form.tooth_no" placeholder="e.g. 16 (FDI)"></label><label>Diagnosis<input v-model="form.diagnosis" placeholder="Clinical finding"></label><label class="wide">Treatment / notes<textarea v-model="form.treatment_done" rows="3"/></label><label class="wide">Additional notes<textarea v-model="form.notes" rows="2"/></label><label class="wide">Recommended return date<input v-model="form.follow_up_date" type="date" :min="today"><small>Optional. The patient will see this recommendation and receive an in-app notification if their account is linked. This does not book an appointment.</small></label></div><button class="button button-primary" :disabled="busy" @click="save">Save dental record</button></section><section class="surface feature-state dental-records"><h2>Interactive 32-tooth chart</h2><p class="muted">Select a patient and tooth to view or update its saved condition. Unrecorded teeth remain blank.</p><label class="chart-patient">Patient<select v-model="chartPatient" @change="loadChart"><option value="">Choose patient</option><option v-for="p in chartPatients" :key="p.id" :value="String(p.id)">{{p.first_name}} {{p.last_name}}</option></select></label><div class="arch-label">UPPER ARCH · FDI notation</div><div class="tooth-grid"><button v-for="t in upperTeeth" :key="t" :class="['tooth', `condition-${(toothMap[String(t)]||'Unrecorded').toLowerCase().replace(' ','-')}`, { chosen:selectedTooth===String(t) }]" @click="selectedTooth=String(t);toothCondition=toothMap[String(t)]||''">{{t}}</button></div><div class="arch-label">LOWER ARCH · FDI notation</div><div class="tooth-grid"><button v-for="t in lowerTeeth" :key="t" :class="['tooth', `condition-${(toothMap[String(t)]||'Unrecorded').toLowerCase().replace(' ','-')}`, { chosen:selectedTooth===String(t) }]" @click="selectedTooth=String(t);toothCondition=toothMap[String(t)]||''">{{t}}</button></div><div v-if="selectedTooth" class="tooth-editor"><strong>Tooth {{selectedTooth}}</strong><select v-model="toothCondition"><option value="" disabled>Select a condition</option><option v-for="c in ['Healthy','Decayed','Filled','Crown','Root Canal','Extracted']" :key="c">{{c}}</option></select><button class="button button-primary" :disabled="busy||!chartPatient||!toothCondition" @click="saveTooth">Save condition</button></div></section><section class="surface feature-state dental-records"><h2>Recent clinical records</h2><div v-if="!recordRows.length" class="empty-state">No records have been added yet.</div><div v-for="r in recordRows" :key="r.record_id" class="appointment-card"><div><strong>{{r.patient_name}} · {{r.tooth_no ? `Tooth ${r.tooth_no}` : 'Clinical note'}}</strong><p>{{r.diagnosis||'No diagnosis'}} · {{r.treatment_done||'No treatment noted'}}</p><p v-if="r.follow_up_date">Recommended return: {{r.follow_up_date}}</p></div><small>{{r.created_at}}</small></div></section></template>
+    <template v-else-if="kind==='records'">
+      <section class="surface feature-state dental-records">
+        <h2>Add dental record</h2>
+        <div class="form-grid">
+          <label>Appointment<select v-model.number="form.appointment_id"><option value="">Choose appointment</option><option v-for="a in appointments" :key="a.appointment_id" :value="a.appointment_id">#{{a.appointment_id}} · {{a.patient}} · {{a.service_name}} · {{a.appt_date}}</option></select></label>
+          <label>Dentist<select v-model.number="form.dentist_id"><option value="">Choose dentist</option><option v-for="d in dentists" :key="d.dentist_id" :value="d.dentist_id">{{d.username}} ({{d.specialization}})</option></select></label>
+          <label>Tooth number<input v-model="form.tooth_no" placeholder="e.g. 16 (FDI)"></label>
+          <label>Diagnosis<input v-model="form.diagnosis" placeholder="Clinical finding"></label>
+          <label class="wide">Treatment / notes<textarea v-model="form.treatment_done" rows="3"/></label>
+          <label class="wide">Additional notes<textarea v-model="form.notes" rows="2"/></label>
+          <label class="wide">Return visit
+            <span class="return-visit-fields"><input v-model="form.follow_up_date" type="date" :min="today" aria-label="Return visit date"><input v-model="form.follow_up_time" type="time" aria-label="Return visit time"></span>
+            <small>Optional. Set both date and time to add a reminder to the patient’s calendar and notify the patient and dentist. It does not reserve an appointment slot.</small>
+          </label>
+        </div>
+        <button class="button button-primary" :disabled="busy" @click="save">Save dental record</button>
+      </section>
+      <section class="surface feature-state dental-records">
+        <h2>Recent clinical records</h2>
+        <div v-if="!recordRows.length" class="empty-state">No records have been added yet.</div>
+        <div v-for="r in recordRows" :key="r.record_id" class="appointment-card">
+          <div>
+            <strong>{{r.patient_name}} · {{r.tooth_no ? `Tooth ${r.tooth_no}` : 'Clinical note'}}</strong>
+            <p>{{r.diagnosis||'No diagnosis'}} · {{r.treatment_done||'No treatment noted'}}</p>
+            <p v-if="r.follow_up_date">Return visit: {{r.follow_up_date}}{{r.follow_up_time ? ` · ${r.follow_up_time.slice(0,5)}` : ''}}</p>
+          </div>
+          <small>{{r.created_at}}</small>
+        </div>
+      </section>
+    </template>
     <template v-else-if="kind==='prescriptions'"><section v-if="!patientMode" class="surface feature-state"><h2>Create prescription record</h2><p class="muted">A prescription is the dentist’s written medication plan, including the medicine and how the patient should take it. Record only instructions provided by the treating clinician.</p><div class="form-grid"><label>Patient<select v-model.number="form.patient_id"><option value="">Choose patient</option><option v-for="p in patientContacts" :key="p.id" :value="p.id">{{p.first_name}} {{p.last_name}}</option></select></label><label>Medication<input v-model="form.medication" required></label><label class="wide">Directions<textarea v-model="form.directions" rows="3" required/></label></div><button class="button button-primary" :disabled="busy" @click="save">Save prescription</button></section><section class="surface feature-state"><h2>{{patientMode?'Your prescriptions':'Prescription history'}}</h2><div v-if="!prescriptionRows.length" class="empty-state"><strong>No prescriptions have been recorded</strong><p v-if="patientMode">New instructions from your care team will appear here.</p></div><div v-for="r in prescriptionRows" :key="r.prescription_id" class="appointment-card"><div><strong>{{patientMode?'':`${r.patient_name} · `}}{{r.medication}}</strong><p>{{r.directions}}</p><small>{{r.created_at}}</small></div><span class="status-badge">{{r.status}}</span></div></section></template>
     <template v-else>
       <section class="surface messenger">
@@ -291,7 +365,7 @@ onBeforeUnmount(() => {
             <span class="contact-summary">
               <span class="contact-avatar"><img v-if="profilePictures[contact.user_id]" :src="profilePictures[contact.user_id]" alt=""><span v-else>{{contactInitials(contact.username)}}</span></span>
               <span class="contact-identity"><strong>{{contact.username}}</strong><small>{{contact.role_name}} · <span :class="['presence-label', { online: Number(contact.is_online) === 1 }]">{{Number(contact.is_online)===1?'Online':'Offline'}}</span></small></span>
-              <span v-if="Number(contact.unread_count)>0" class="unread-count" :aria-label="`${contact.unread_count} unread messages`">{{contact.unread_count}}</span>
+              <span v-if="Number(contact.unread_count)>0" class="unread-count" :aria-label="`${contact.username} sent ${contact.unread_count} new message${Number(contact.unread_count) === 1 ? '' : 's'}`">{{Number(contact.unread_count)>99?'New 99+':`New ${contact.unread_count}`}}</span>
             </span>
             <span v-if="contact.last_message" class="contact-preview">{{Number(contact.last_message_sender_id)===contact.user_id?`${contact.username}: `:'You: '}}{{contact.last_message}}</span>
             <time v-if="contact.last_message_at" class="contact-time">{{contact.last_message_at}}</time>
@@ -333,8 +407,7 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
-.form-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;margin:18px 0}.form-grid label{display:grid;gap:6px;color:#718793;font-size:13px;font-weight:650}.form-grid input,.form-grid select,.form-grid textarea{width:100%;border:1px solid #dce8e8;border-radius:11px;padding:11px;background:#fff;color:#183b4c;font:inherit}.wide{grid-column:1/-1}.feature-state{margin-bottom:18px}.feature-state h2{margin-top:0}.appointment-card{display:flex;justify-content:space-between;gap:16px;padding:14px 4px;border-top:1px solid #e4edf0}.appointment-card p{margin:4px 0;color:#718793}.appointment-card small{color:#718793}@media(max-width:700px){.form-grid{grid-template-columns:1fr}.wide{grid-column:auto}}
-.chart-patient{display:grid;max-width:380px;gap:6px;margin:15px 0;color:#718793;font-size:13px;font-weight:650}.chart-patient select,.tooth-editor select{border:1px solid #dce8e8;border-radius:10px;padding:10px;background:#fff}.arch-label{margin:18px 0 8px;color:#8390a2;font-size:11.9px;font-weight:750;letter-spacing:.7px}.tooth-grid{display:grid;grid-template-columns:repeat(16,minmax(26px,1fr));gap:6px;overflow:auto}.tooth{min-width:28px;height:38px;border:1px solid #dce8e8;border-radius:9px;background:#f4fbf8;color:#39745f;font-weight:700}.tooth.condition-unrecorded{background:#f2f4f6;color:#8995a4;border-style:dashed}.tooth.condition-decayed{background:#fff0e3;color:#9c6436}.tooth.condition-filled,.tooth.condition-crown{background:#eee9ff;color:#6956a2}.tooth.condition-root-canal{background:#e8f4ff;color:#426c93}.tooth.condition-extracted{background:#fce9eb;color:#a15460}.tooth.chosen{outline:2px solid #438d75;outline-offset:1px}.tooth-editor{display:flex;align-items:center;gap:12px;margin-top:18px}.tooth-editor select{min-width:160px}
+.form-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;margin:18px 0}.form-grid label{display:grid;gap:6px;color:#718793;font-size:13px;font-weight:650}.form-grid input,.form-grid select,.form-grid textarea{width:100%;border:1px solid #dce8e8;border-radius:11px;padding:11px;background:#fff;color:#183b4c;font:inherit}.return-visit-fields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.wide{grid-column:1/-1}.feature-state{margin-bottom:18px}.feature-state h2{margin-top:0}.appointment-card{display:flex;justify-content:space-between;gap:16px;padding:14px 4px;border-top:1px solid #e4edf0}.appointment-card p{margin:4px 0;color:#718793}.appointment-card small{color:#718793}@media(max-width:700px){.form-grid{grid-template-columns:1fr}.wide{grid-column:auto}}
 .messenger{display:grid;grid-template-columns:240px minmax(0,1fr);min-height:520px;overflow:hidden;padding:0}.messenger-contacts{padding:18px;border-right:1px solid var(--line)}.messenger-contacts h2,.messenger-thread h2{margin:0 0 12px;font-size:16.2px}.messenger-contacts button{display:grid;width:100%;gap:3px;margin:5px 0;padding:11px;border:0;border-radius:10px;background:transparent;text-align:left;color:var(--ink)}.messenger-contacts button.selected,.messenger-contacts button:hover{background:#e8f4ee}.messenger-contacts small,.message-bubble small{color:var(--muted);font-size:10.8px}.messenger-thread{display:flex;min-width:0;flex-direction:column;padding:18px}.messenger-thread header{border-bottom:1px solid var(--line)}.messenger-thread header p{margin:0 0 12px}.message-thread{display:flex;flex:1;flex-direction:column;gap:10px;overflow:auto;padding:16px 3px}.message-bubble{align-self:flex-start;max-width:min(78%,520px);padding:10px 13px;border-radius:14px 14px 14px 4px;background:#eef2f5}.message-bubble.outgoing{align-self:flex-end;border-radius:14px 14px 4px 14px;background:#e4f6ed}.message-bubble p{margin:4px 0 0;color:var(--ink);font-size:14px;white-space:pre-wrap;overflow-wrap:anywhere}.message-composer{display:flex;align-items:end;gap:10px;padding-top:12px;border-top:1px solid var(--line)}.message-composer textarea{flex:1;min-width:0;border:1px solid var(--line);border-radius:11px;padding:10px;background:var(--surface);color:var(--ink);font:inherit;resize:vertical}.contact-preview{overflow:hidden;color:var(--muted);font-size:10.8px;text-overflow:ellipsis;white-space:nowrap}.contact-time{color:var(--muted);font-size:9.7px}.messenger-contacts button.has-unread:not(.selected){border:1px solid #f1c5cb;background:#fff7f8}.messenger-contacts button.has-unread:not(.selected) strong{font-weight:800}.messenger-contacts button.has-unread:not(.selected) small{color:#bd3c51;font-weight:700}@media(max-width:700px){.messenger{grid-template-columns:1fr}.messenger-contacts{display:flex;flex-wrap:wrap;gap:5px;border-right:0;border-bottom:1px solid var(--line)}.messenger-contacts h2{width:100%}.messenger-contacts button{width:auto}.messenger-thread{min-height:420px;padding:13px}}
 .delivery-status{display:block;margin-top:5px;text-align:right;color:#5d8a78!important;font-size:10.8px!important}
 .contact-summary{display:flex;align-items:center;justify-content:space-between;gap:8px}.unread-count{display:inline-grid;min-width:20px;height:20px;place-items:center;padding:0 6px;border-radius:999px;background:#d34f61;color:#fff;font-size:10.8px;font-weight:750}.messenger-contacts button:not(.selected):has(.unread-count) strong{font-weight:800}.messenger-contacts button:not(.selected):has(.unread-count) small{color:#bd3c51;font-weight:700}
@@ -372,30 +445,7 @@ onBeforeUnmount(() => {
 :global(.app-shell[data-theme='dark'] .messenger .message-composer textarea) { border-color: #40534b; background: #1d2a25; color: #e4ede9; }
 :global(.app-shell[data-theme='dark'] .messenger .message-composer textarea::placeholder) { color: #82988d; opacity: 1; }
 :global(.app-shell[data-theme='dark'] .messenger .message-thread > .empty-state) { border-color: transparent; background: transparent; color: #c1d0c9; }
-:global(.app-shell[data-theme='dark'] .dental-records h2),
-:global(.app-shell[data-theme='dark'] .dental-records .tooth-editor strong) { color: #e4ede9; }
-:global(.app-shell[data-theme='dark'] .dental-records > .muted),
-:global(.app-shell[data-theme='dark'] .dental-records .form-grid label),
-:global(.app-shell[data-theme='dark'] .dental-records .chart-patient),
-:global(.app-shell[data-theme='dark'] .dental-records .arch-label) { color: #a3b3ae; }
-:global(.app-shell[data-theme='dark'] .dental-records .form-grid input),
-:global(.app-shell[data-theme='dark'] .dental-records .form-grid select),
-:global(.app-shell[data-theme='dark'] .dental-records .form-grid textarea),
-:global(.app-shell[data-theme='dark'] .dental-records .chart-patient select),
-:global(.app-shell[data-theme='dark'] .dental-records .tooth-editor select) { border-color: #40534b; background: #1d2a25; color: #e4ede9; color-scheme: dark; }
-:global(.app-shell[data-theme='dark'] .dental-records .form-grid input::placeholder),
-:global(.app-shell[data-theme='dark'] .dental-records .form-grid textarea::placeholder) { color: #82988d; }
-:global(.app-shell[data-theme='dark'] .dental-records .form-grid small) { color: #a3b3ae; }
-:global(.app-shell[data-theme='dark'] .dental-records .tooth) { border-color: #40534b; background: #263630; color: #c1d0c9; }
-:global(.app-shell[data-theme='dark'] .dental-records .tooth.condition-unrecorded) { border-color: #52635c; background: #202e2a; color: #a3b3ae; }
-:global(.app-shell[data-theme='dark'] .dental-records .tooth.condition-healthy) { border-color: #426d55; background: #244231; color: #a4e2ba; }
-:global(.app-shell[data-theme='dark'] .dental-records .tooth.condition-decayed) { border-color: #806347; background: #403226; color: #f0c77b; }
-:global(.app-shell[data-theme='dark'] .dental-records .tooth.condition-filled),
-:global(.app-shell[data-theme='dark'] .dental-records .tooth.condition-crown) { border-color: #655787; background: #332c46; color: #d3c5ff; }
-:global(.app-shell[data-theme='dark'] .dental-records .tooth.condition-root-canal) { border-color: #4a6b83; background: #263947; color: #b6dcf6; }
-:global(.app-shell[data-theme='dark'] .dental-records .tooth.condition-extracted) { border-color: #754849; background: #40272a; color: #f0a3a8; }
-:global(.app-shell[data-theme='dark'] .dental-records .tooth:hover) { border-color: #70b894; }
-:global(.app-shell[data-theme='dark'] .dental-records .tooth.chosen) { outline-color: #70c697; }
+:global(.app-shell[data-theme='dark'] .dental-records h2) { color: #e4ede9; }
 :global(.app-shell[data-theme='dark'] .dental-records .appointment-card) { border-color: #354741; }
 :global(.app-shell[data-theme='dark'] .dental-records .appointment-card strong) { color: #e4ede9; }
 :global(.app-shell[data-theme='dark'] .dental-records .appointment-card p),

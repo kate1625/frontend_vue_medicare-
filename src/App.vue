@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { RouterLink, RouterView, useRoute, useRouter } from 'vue-router'
 import { endSession, getApiData, getPortalRole, getStaffUser } from './services/api'
 import { getProfilePicture } from './services/profilePreferences'
@@ -10,16 +10,37 @@ import ConfirmDialog from './components/ConfirmDialog.vue'
 import ToastHost from './components/ToastHost.vue'
 import { notify, type ToastCategory } from './services/toast'
 
+interface IncomingMessage {
+  message_id: number | string
+  sender_id: number | string
+  recipient_id: number | string
+  sender: string
+  is_read: boolean | number | string
+}
+
+interface IncomingNotification {
+  id: number | string
+  title: string
+  message: string
+  type: string
+  redirect_url: string | null
+  created_at: string
+  is_read: boolean | number | string
+}
+
+const logoutToastKey = 'medicare.logout-toast'
+
 const route = useRoute()
 const router = useRouter()
 const isPublicPage = computed(() => route.meta.public === true)
+const pageContent = ref<HTMLElement | null>(null)
 const staff = ref(getStaffUser())
 const profilePicture = ref(readProfilePicture())
 const role = ref(getPortalRole())
 const isDarkMode = ref(localStorage.getItem('medicare-theme') === 'dark')
 const navPages = computed(() => sitemap.filter((page) =>
   !page.path.includes('/:')
-  && ![18, 24].includes(page.number)
+  && ![18, 24, 31].includes(page.number)
   && !(role.value === 'admin' && page.number === 32)
   && (page.area === role.value || (role.value === 'admin' && page.area === 'staff')),
 ))
@@ -42,8 +63,10 @@ let connectionHealthTimer: number | null = null
 let connectionHealthFailures = 0
 let unreadCountsInFlight = false
 let notificationsInitialized = false
+let incomingMessagesInitialized = false
 let previousUnreadMessages: number | null = null
 const seenNotificationIds = new Set<string>()
+const seenIncomingMessageIds = new Set<string>()
 const messagePath = computed(() => role.value === 'patient' ? '/patient/messages' : '/staff/messages')
 const notificationPath = computed(() => role.value === 'patient' ? '/patient/notifications' : role.value === 'admin' ? '/admin/notifications' : '/staff/notifications')
 const emailNotificationPath = computed(() => role.value === 'patient' ? '/patient/notifications' : '/staff/email-log')
@@ -136,24 +159,20 @@ async function refreshUnreadCounts() {
     unreadMessageCount.value = 0
     unreadNotificationCount.value = 0
     notificationsInitialized = false
+    incomingMessagesInitialized = false
     previousUnreadMessages = null
     seenNotificationIds.clear()
+    seenIncomingMessageIds.clear()
     return
   }
 
   unreadCountsInFlight = true
   try {
     let newUnreadMessages = 0
-    const [countsResult, notificationsResult] = await Promise.allSettled([
+    const [countsResult, notificationsResult, messagesResult] = await Promise.allSettled([
       getApiData<{ messages: number; notifications: number }>('/api/workspace/unread-counts'),
-      getApiData<Array<{
-        id: number | string
-        title: string
-        message: string
-        type: string
-        redirect_url: string | null
-        created_at: string
-      }>>('/api/notifications'),
+      getApiData<IncomingNotification[]>('/api/notifications'),
+      getApiData<{ messages: IncomingMessage[] }>('/api/messages'),
     ])
 
     if (countsResult.status === 'fulfilled') {
@@ -167,7 +186,40 @@ async function refreshUnreadCounts() {
       console.error('Could not load unread message and notification counts.', countsResult.reason)
     }
 
-    if (notificationsResult.status === 'rejected') {
+    if (messagesResult.status === 'fulfilled') {
+      const currentUserId = staff.value?.id
+      const incomingMessages = messagesResult.value.messages.filter(
+        (message) => Number(message.recipient_id) === currentUserId,
+      )
+      const newMessages = incomingMessagesInitialized
+        ? incomingMessages.filter((message) => !seenIncomingMessageIds.has(String(message.message_id)))
+        : incomingMessages.filter((message) => isUnread(message.is_read))
+
+      seenIncomingMessageIds.clear()
+      incomingMessages.forEach((message) => seenIncomingMessageIds.add(String(message.message_id)))
+      incomingMessagesInitialized = true
+
+      const messagesBySender = new Map<string, { sender: string; count: number }>()
+      for (const message of newMessages) {
+        const senderId = String(message.sender_id)
+        const summary = messagesBySender.get(senderId)
+        if (summary) {
+          summary.count += 1
+        } else {
+          messagesBySender.set(senderId, { sender: message.sender.trim(), count: 1 })
+        }
+      }
+
+      for (const { sender, count } of [...messagesBySender.values()].slice(0, 3)) {
+        notify.incoming(
+          count === 1 ? 'You have a new message.' : `You have ${count} new messages.`,
+          `Message from ${sender || 'a clinic contact'}`,
+          'message',
+          messagePath.value,
+        )
+      }
+    } else {
+      console.error('Could not check for new chat messages.', messagesResult.reason)
       if (newUnreadMessages > 0) {
         notify.incoming(
           newUnreadMessages === 1 ? 'You have a new message.' : `You have ${newUnreadMessages} new messages.`,
@@ -176,6 +228,9 @@ async function refreshUnreadCounts() {
           messagePath.value,
         )
       }
+    }
+
+    if (notificationsResult.status === 'rejected') {
       console.error('Could not check for new MediCare+ notifications.', notificationsResult.reason)
       return
     }
@@ -184,6 +239,7 @@ async function refreshUnreadCounts() {
     if (!notificationsInitialized) {
       notifications.forEach((notification) => seenNotificationIds.add(String(notification.id)))
       notificationsInitialized = true
+      showNotificationToasts(notifications.filter((notification) => isUnread(notification.is_read)))
       return
     }
 
@@ -202,26 +258,33 @@ async function refreshUnreadCounts() {
       })
       .slice(-3)
 
-    for (const notification of newNotifications.reverse()) {
-      const category = notificationCategory(notification.type, notification.title, notification.message)
-      const path = notification.redirect_url?.startsWith('/') && !notification.redirect_url.startsWith('//')
-        ? notification.redirect_url
-        : undefined
-      notify.incoming(notification.message, notification.title, category, path)
-    }
+    showNotificationToasts(newNotifications)
 
-    if (newUnreadMessages > 0 && !newNotifications.some((notification) =>
-      notificationCategory(notification.type, notification.title, notification.message) === 'message',
-    )) {
-      notify.incoming(
-        newUnreadMessages === 1 ? 'You have a new message.' : `You have ${newUnreadMessages} new messages.`,
-        newUnreadMessages === 1 ? 'New message' : 'New messages',
-        'message',
-        messagePath.value,
-      )
-    }
   } finally {
     unreadCountsInFlight = false
+  }
+}
+
+function isUnread(value: boolean | number | string) {
+  return value === false || value === 0 || value === '0' || value === 'false'
+}
+
+function showNotificationToasts(notifications: IncomingNotification[]) {
+  const recentNotifications = [...notifications]
+    .sort((first, second) => {
+      const firstCreatedAt = Date.parse(first.created_at)
+      const secondCreatedAt = Date.parse(second.created_at)
+      return (Number.isNaN(firstCreatedAt) ? 0 : firstCreatedAt)
+        - (Number.isNaN(secondCreatedAt) ? 0 : secondCreatedAt)
+    })
+    .slice(-3)
+
+  for (const notification of recentNotifications.reverse()) {
+    const category = notificationCategory(notification.type, notification.title, notification.message)
+    const path = notification.redirect_url?.startsWith('/') && !notification.redirect_url.startsWith('//')
+      ? notification.redirect_url
+      : undefined
+    notify.incoming(notification.message, notification.title, category, path)
   }
 }
 
@@ -340,7 +403,20 @@ function reportConnectionError() {
   }
 }
 
+function animatePageContent() {
+  if (isPublicPage.value || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return
+
+  void nextTick(() => {
+    const element = pageContent.value
+    if (!element || isPublicPage.value) return
+    element.classList.remove('portal-page-enter')
+    void element.offsetWidth
+    element.classList.add('portal-page-enter')
+  })
+}
+
 onMounted(() => {
+  animatePageContent()
   window.addEventListener('online', updateConnectionStatus)
   window.addEventListener('offline', updateConnectionStatus)
   window.addEventListener('medicare:connection-error', reportConnectionError)
@@ -349,6 +425,15 @@ onMounted(() => {
   window.addEventListener('medicare:messages-read', markMessagesRead)
   window.addEventListener('medicare:notifications-change', refreshUnreadCounts)
   document.addEventListener('visibilitychange', refreshCountsWhenVisible)
+  const logoutResult = sessionStorage.getItem(logoutToastKey)
+  if (logoutResult) {
+    sessionStorage.removeItem(logoutToastKey)
+    if (logoutResult === 'success') {
+      notify.success('You have been securely logged out.', 'Signed out')
+    } else {
+      notify.warning('You are signed out on this device, but the server could not confirm logout.', 'Signed out')
+    }
+  }
   initialUnreadCountsTimer = window.setTimeout(() => {
     initialUnreadCountsTimer = null
     refreshCountsWhenVisible()
@@ -396,6 +481,7 @@ watch(() => route.fullPath, () => {
   staff.value = getStaffUser()
   role.value = getPortalRole()
   void refreshUnreadCounts()
+  animatePageContent()
 })
 
 function signOut() {
@@ -406,14 +492,22 @@ async function confirmSignOut() {
   if (signingOut.value) return
   showLogoutConfirmation.value = false
   signingOut.value = true
-  try { await endSession() } catch { /* Session is cleared even when the API is offline. */ }
+  let logoutConfirmed = false
+  try {
+    await endSession()
+    logoutConfirmed = true
+  } catch (cause) {
+    console.error('The local session ended, but the server could not confirm logout.', cause)
+  }
+
+  sessionStorage.setItem(logoutToastKey, logoutConfirmed ? 'success' : 'warning')
   window.location.assign('/')
 }
 </script>
 
 <template>
   <div v-if="!isOnline" class="offline-banner" role="status" aria-live="polite">
-    Connection unavailable. App pages may open from cache, but records, sign-in, and changes need the server. Nothing is saved offline.
+    Connection unavailable. Try again
   </div>
   <Transition name="reconnected-fade">
     <div v-if="showReconnectedNotice" class="reconnected-banner" role="status" aria-live="polite">
@@ -423,7 +517,7 @@ async function confirmSignOut() {
   </Transition>
   <RouterView v-if="isPublicPage" />
 
-  <div v-else class="app-shell" :class="{ 'sidebar-collapsed': sidebarCollapsed }" :data-theme="isDarkMode ? 'dark' : 'light'">
+  <div v-show="!isPublicPage" class="app-shell" :class="{ 'sidebar-collapsed': sidebarCollapsed }" :data-theme="isDarkMode ? 'dark' : 'light'">
     <aside class="sidebar" :class="{ open: mobileOpen, 'sidebar-role-compact': role === 'patient' || role === 'admin' }">
       <div class="sidebar-header">
         <RouterLink
@@ -529,7 +623,13 @@ async function confirmSignOut() {
         <div class="top-search"><UiIcon name="search" /><input v-model="searchText" type="search" placeholder="Search pages and features..." aria-label="Search pages and features" @keydown.enter="searchMatches[0] && goToSearchResult(searchMatches[0].path)"><div v-if="searchMatches.length" class="search-results"><button v-for="page in searchMatches" :key="page.number" type="button" @click="goToSearchResult(page.path)">{{ page.title }}<small>{{ page.path }}</small></button></div></div>
         <div class="topbar-actions"><button class="top-icon theme-toggle" type="button" :aria-label="isDarkMode ? 'Switch to light mode' : 'Switch to dark mode'" :aria-pressed="isDarkMode" @click="toggleTheme"><UiIcon :name="isDarkMode ? 'sun' : 'moon'" /></button><RouterLink class="top-icon notification-link" :to="notificationPath" :aria-label="unreadNotificationCount ? `Notifications, ${unreadNotificationCount} unread` : 'Notifications'"><UiIcon name="bell" /><span v-if="unreadNotificationCount" class="message-unread-count top-message-count" aria-hidden="true">{{ unreadNotificationCount > 99 ? '99+' : unreadNotificationCount }}</span></RouterLink><RouterLink class="top-icon email-notification-link" :to="emailNotificationPath" :aria-label="role === 'patient' ? 'Email notifications' : 'Email and notification log'"><UiIcon name="mail" /></RouterLink><RouterLink class="top-icon message-link" :to="messagePath" :aria-label="unreadMessageCount ? `Messages, ${unreadMessageCount} unread` : 'Messages'"><UiIcon name="message-circle" /><span v-if="unreadMessageCount" class="message-unread-count top-message-count" aria-hidden="true">{{ unreadMessageCount > 99 ? '99+' : unreadMessageCount }}</span></RouterLink><RouterLink class="top-user top-user-profile" to="/settings/profile" aria-label="Profile and settings"><span class="avatar" aria-hidden="true"><img v-if="profilePicture" :src="profilePicture" alt=""><span v-else>{{ userInitials }}</span></span><span><strong>{{ staff?.username ?? 'MediCare user' }}</strong><small>{{ staff?.role ?? 'Patient' }}</small></span></RouterLink></div>
       </header>
-      <main class="page-content"><RouterView /></main>
+      <main ref="pageContent" class="page-content">
+        <RouterView v-slot="{ Component, route: pageRoute }">
+          <KeepAlive :max="30">
+            <component v-if="!pageRoute.meta.public" :is="Component" :key="pageRoute.fullPath" />
+          </KeepAlive>
+        </RouterView>
+      </main>
     </div>
   </div>
   <Transition name="logout-fade">

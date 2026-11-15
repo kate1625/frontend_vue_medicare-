@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, nextTick, ref, watch } from 'vue'
+import { computed, onActivated, onBeforeUnmount, onMounted, nextTick, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { Calendar, type EventInput } from '@fullcalendar/core'
 import dayGridPlugin from '@fullcalendar/daygrid'
@@ -209,6 +209,9 @@ onMounted(async () => {
   await loadOverview()
   await nextTick()
   if (isVerified.value === true) initializeCalendar()
+})
+onActivated(() => {
+  if (calendar) void nextTick().then(() => calendar?.updateSize())
 })
 onBeforeUnmount(() => { calendar?.destroy(); calendar = null })
 </script>

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { computed, nextTick, onActivated, onBeforeUnmount, onDeactivated, onMounted, reactive, ref, watch } from 'vue'
 import { ApiError, apiRequest, getApiData } from '../services/api'
 import { useRoute } from 'vue-router'
 import SkeletonLoader from '../components/SkeletonLoader.vue'
@@ -84,8 +84,21 @@ watch(selectedMethod, async (method) => {
   }
 })
 async function submit() {
+  if (selectedOnlineMethod.value) {
+    error.value = 'Online e-wallet and card payments must be completed through PayMongo.'
+    return
+  }
   saving.value = true; error.value = ''; message.value = ''
-  try { const result = await apiRequest<{ data: { payment_id: number }; message: string }>('/api/payments', { method: 'POST', body: JSON.stringify({ ...form, appointment_id: Number(form.appointment_id), payment_method_id: Number(form.payment_method_id) }) }); receiptPaymentId.value = result.data.payment_id; message.value = 'Payment submitted successfully. Your receipt is ready while the clinic verifies the payment.'; notify.success(message.value, 'Payment submitted'); form.reference_no = ''; await refresh() }
+  try {
+    await apiRequest<{ data: { payment_id: number }; message: string }>('/api/payments', { method: 'POST', body: JSON.stringify({ ...form, appointment_id: Number(form.appointment_id), payment_method_id: Number(form.payment_method_id) }) })
+    receiptPaymentId.value = null
+    message.value = selectedMethod.value?.type === 'cash'
+      ? 'Cash payment recorded. Your official receipt will be released when the clinic receives your payment during your visit.'
+      : 'Payment submitted for clinic verification. Your official receipt will be available after the clinic confirms payment.'
+    notify.success(message.value, 'Payment submitted')
+    form.reference_no = ''
+    await refresh()
+  }
   catch (cause) { error.value = cause instanceof ApiError ? cause.message : 'Payment could not be submitted.'; notify.error(error.value, 'Payment not submitted') }
   finally { saving.value = false }
 }
@@ -103,7 +116,7 @@ async function startPayMongoCheckout() {
   } catch (cause) {
     error.value = cause instanceof ApiError
       ? cause.message
-      : 'Online checkout is temporarily unavailable. Please use “Submit for clinic review” instead.'
+      : 'Online checkout is temporarily unavailable. Try PayMongo again or choose cash or bank transfer.'
     notify.error(error.value, 'Online checkout unavailable')
     saving.value = false
   }
@@ -120,7 +133,7 @@ async function checkPayMongoReturn() {
     })
     message.value = result.message
     notify.success(result.message, 'Payment update')
-    receiptPaymentId.value = paymentId
+    receiptPaymentId.value = result.data.status === 'verified' ? paymentId : null
     if (result.data.status !== 'pending') {
       paymongoCheckoutUrl.value = ''
       sessionStorage.removeItem(PAYMONGO_CHECKOUT_URL_KEY)
@@ -133,27 +146,37 @@ async function checkPayMongoReturn() {
     saving.value = false
   }
 }
+function startPaymentRefresh() {
+ if (paymentRefreshTimer !== null) return
+ paymentRefreshTimer = window.setInterval(() => {
+   if (payments.value.some((payment) => payment.status === 'pending')) void refresh(false)
+ }, 15000)
+}
+function stopPaymentRefresh() {
+ if (paymentRefreshTimer === null) return
+ window.clearInterval(paymentRefreshTimer)
+ paymentRefreshTimer = null
+}
 onMounted(async () => {
   await refresh()
   await checkPayMongoReturn()
-  paymentRefreshTimer = window.setInterval(() => {
-    if (payments.value.some((payment) => payment.status === 'pending')) void refresh(false)
-  }, 15000)
+ startPaymentRefresh()
 })
-onBeforeUnmount(() => { if (paymentRefreshTimer) window.clearInterval(paymentRefreshTimer) })
+onActivated(startPaymentRefresh)
+onDeactivated(stopPaymentRefresh)
+onBeforeUnmount(stopPaymentRefresh)
 </script>
 <template>
   <div class="payment-workspace">
-    <header class="payment-heading">
+    <header class="page-heading payment-heading">
       <div>
-        <p class="payment-eyebrow"> <span></span> </p>
         <h1>Payments</h1>
         <p>Review appointment charges and manage your clinic payments.</p>
       </div>
 
     </header>
 
-    <p v-if="message" class="payment-alert payment-alert-success" role="status">{{ message }} <RouterLink v-if="receiptPaymentId" :to="{ path: '/patient/receipt', query: { id: receiptPaymentId } }">View receipt</RouterLink><RouterLink v-else to="/patient/receipt">View receipts</RouterLink></p>
+    <p v-if="message" class="payment-alert payment-alert-success" role="status">{{ message }} <RouterLink v-if="receiptPaymentId" :to="{ path: '/patient/receipt', query: { id: receiptPaymentId } }">View receipt</RouterLink></p>
     <p v-if="message && paymongoCheckoutUrl" class="payment-alert payment-alert-info"><a :href="paymongoCheckoutUrl" target="_blank" rel="noopener">Continue to PayMongo checkout</a></p>
 
     <SkeletonLoader v-if="loading" variant="payment" label="Loading payment options and billing details" />
@@ -207,10 +230,13 @@ onBeforeUnmount(() => { if (paymentRefreshTimer) window.clearInterval(paymentRef
               </select>
               <small>Unavailable methods are marked and cannot be selected.</small>
             </label>
+            <p v-if="selectedOnlineMethod" class="payment-guidance field-full" role="status">
+              Card and e-wallet payments are processed and verified through PayMongo. Clinic review submission is not available for online payments.
+            </p>
 
             <p v-if="!methods.some((item)=>Number(item.is_maintenance)!==1)" class="form-error field-full">All clinic payment methods are temporarily unavailable. Please contact the clinic.</p>
 
-            <div v-if="selectedMethod" class="payment-instructions payment-method-details field-full">
+            <div v-if="selectedMethod && !selectedOnlineMethod" class="payment-instructions payment-method-details field-full">
               <div class="payment-method-details-heading"><strong>{{ selectedMethod.method_name }} instructions</strong><span v-if="Number(selectedMethod.is_maintenance)===1" class="payment-maintenance">Under maintenance</span></div>
               <p v-if="Number(selectedMethod.is_maintenance)===1" class="form-error">This payment method is under maintenance. Please choose another method.</p>
               <p v-if="selectedMethod.account_name"><strong>Account name</strong><span>{{ selectedMethod.account_name }}</span></p>
@@ -219,14 +245,14 @@ onBeforeUnmount(() => { if (paymentRefreshTimer) window.clearInterval(paymentRef
               <img v-if="qr" :src="qr" alt="Payment account QR code" width="180" height="180">
             </div>
 
-            <label class="payment-field field-full">
+            <label v-if="!selectedOnlineMethod" class="payment-field field-full">
               <span>Reference number <em>Optional</em></span>
               <input v-model="form.reference_no" maxlength="100" placeholder="Enter your transfer or transaction reference">
             </label>
 
             <p v-if="error" class="form-error field-full" role="alert">{{ error }}</p>
             <div class="payment-actions field-full">
-              <button class="button button-primary" :disabled="saving || !selectedMethodAvailable">{{ saving ? 'Submitting…' : 'Submit for clinic review' }}</button>
+              <button v-if="!selectedOnlineMethod" class="button button-primary" :disabled="saving || !selectedMethodAvailable">{{ saving ? 'Submitting…' : 'Submit for clinic review' }}</button>
               <button v-if="selectedOnlineMethod" class="button button-quiet" type="button" :disabled="saving || !form.appointment_id || !selectedMethodAvailable" @click="startPayMongoCheckout">{{ saving ? 'Connecting…' : 'Pay online · PayMongo test' }}</button>
             </div>
           </form>
@@ -260,7 +286,7 @@ onBeforeUnmount(() => { if (paymentRefreshTimer) window.clearInterval(paymentRef
 
       <section v-if="payments.length" class="surface payment-section">
         <div class="payment-section-heading"><div><p class="payment-step">RECENT ACTIVITY</p><h2>Payment history</h2></div><RouterLink class="payment-receipts-link" to="/patient/receipt">View all receipts</RouterLink></div>
-        <div class="payment-history-list"><article v-for="item in payments" :key="item.payment_id" class="payment-history-item"><div class="payment-history-details"><strong>Payment #{{ item.payment_id }}</strong><p>Appointment #{{ item.appointment_id }}</p></div><span class="status-badge" :data-status="item.status">{{ item.status }}</span><RouterLink class="payment-history-receipt" :to="{ path: '/patient/receipt', query: { id: item.payment_id } }">View receipt <span aria-hidden="true">→</span></RouterLink></article></div>
+        <div class="payment-history-list"><article v-for="item in payments" :key="item.payment_id" class="payment-history-item"><div class="payment-history-details"><strong>Payment #{{ item.payment_id }}</strong><p>Appointment #{{ item.appointment_id }}</p></div><span class="status-badge" :data-status="item.status">{{ item.status }}</span><RouterLink v-if="item.status === 'verified'" class="payment-history-receipt" :to="{ path: '/patient/receipt', query: { id: item.payment_id } }">View receipt <span aria-hidden="true">→</span></RouterLink><span v-else class="payment-review-note">{{ item.status === 'pending' ? 'Receipt after clinic confirmation' : 'No receipt issued' }}</span></article></div>
       </section>
     </template>
   </div>
@@ -268,17 +294,14 @@ onBeforeUnmount(() => { if (paymentRefreshTimer) window.clearInterval(paymentRef
 
 <style scoped>
 .payment-workspace {
-  width: min(1120px, 100%);
-  margin: 0 auto;
+  width: 100%;
   padding-bottom: 36px;
 }
 
 .payment-heading {
-  display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 24px;
-  margin-bottom: 26px;
+  gap: 20px;
+  margin-bottom: 23px;
 }
 
 .payment-plan-options {
@@ -306,7 +329,6 @@ onBeforeUnmount(() => { if (paymentRefreshTimer) window.clearInterval(paymentRef
   color: #397c64;
 }
 
-.payment-eyebrow,
 .payment-step {
   margin: 0 0 7px;
   color: #438d75;
@@ -315,23 +337,18 @@ onBeforeUnmount(() => { if (paymentRefreshTimer) window.clearInterval(paymentRef
   letter-spacing: 1.15px;
 }
 
-.payment-eyebrow span {
-  padding: 0 5px;
-  color: #a4b0ba;
-}
-
 .payment-heading h1 {
-  margin: 0;
-  color: #26364a;
-  font-size: clamp(26px, 3vw, 34px);
-  font-weight: 750;
-  letter-spacing: -1px;
+  margin: 6px 0 5px;
+  color: #223951;
+  font-size: clamp(25px, 2.4vw, 31px);
+  font-weight: 720;
+  letter-spacing: -0.8px;
   line-height: 1.2;
 }
 
 .payment-heading > div:first-child > p:last-child {
-  margin: 8px 0 0;
-  color: #748195;
+  margin: 3px 0 0;
+  color: #5f6e82;
   font-size: 14px;
 }
 

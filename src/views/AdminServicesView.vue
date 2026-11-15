@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { onMounted, reactive, ref } from 'vue'
 import { ApiError, apiRequest, getApiData } from '../services/api'
+import { invalidatePublicOverview } from '../services/publicCatalog'
 import { notify } from '../services/toast'
 
 interface Service {
@@ -63,6 +64,7 @@ async function save() {
       method: editingId.value ? 'PUT' : 'POST',
       body: JSON.stringify({ ...form, price: Number(form.price), duration_min: Number(form.duration_min) }),
     })
+    invalidatePublicOverview()
     success.value = editingId.value ? 'Service updated.' : 'Service created.'
     notify.success(success.value, editingId.value ? 'Service updated' : 'Service created')
     dialogOpen.value = false
@@ -80,6 +82,7 @@ async function archive(item: Service) {
   error.value = ''
   try {
     await apiRequest(`/api/services/${item.service_id}`, { method: 'DELETE' })
+    invalidatePublicOverview()
     notify.success(`${item.service_name} was deactivated.`, 'Service deactivated')
     await load()
   } catch (cause) {
@@ -137,69 +140,70 @@ onMounted(load)
       </tbody>
     </table>
   </section>
-  <div v-if="dialogOpen" class="service-dialog-backdrop" @click.self="!saving && (dialogOpen = false)">
-    <section class="surface service-dialog" role="dialog" aria-modal="true" aria-labelledby="service-dialog-title" aria-describedby="service-dialog-description">
-      <header class="service-dialog-heading">
-
-        <div class="service-dialog-title">
-          <p class="service-dialog-kicker">{{ editingId ? 'UPDATE SERVICE' : 'SERVICE CATALOG' }}</p>
-          <h2 id="service-dialog-title">{{ editingId ? 'Edit service details' : 'Add a clinic service' }}</h2>
-          <p id="service-dialog-description">{{ editingId ? 'Keep the service information and booking availability up to date.' : 'Add a service patients can understand and book at your clinic.' }}</p>
-        </div>
-        <button class="service-close-button" type="button" aria-label="Close dialog" :disabled="saving" @click="dialogOpen = false">×</button>
-      </header>
-
-      <form class="service-form" @submit.prevent="save">
-        <p v-if="error" class="service-form-error" role="alert">{{ error }}</p>
-
-        <div class="service-form-grid">
-          <label class="service-field service-field-full">
-            <span>Service name <i>Required</i></span>
-            <input v-model="form.service_name" maxlength="100" placeholder="e.g. Dental cleaning" autocomplete="off" required>
-            <small>Use a clear name patients will recognize.</small>
-          </label>
-
-          <label class="service-field">
-            <span>Category <em>Optional</em></span>
-            <input v-model="form.category" maxlength="50" placeholder="e.g. Preventive care">
-            <small>Helps organize your service catalog.</small>
-          </label>
-
-          <label class="service-field">
-            <span>Price <i>Required</i></span>
-            <div class="service-price-input"><span>₱</span><input v-model="form.price" type="number" min="0" step="0.01" placeholder="0.00" inputmode="decimal" required></div>
-            <small>Enter the amount in Philippine pesos.</small>
-          </label>
-
-          <label class="service-field">
-            <span>Appointment length <i>Required</i></span>
-            <div class="service-duration-input"><input v-model="form.duration_min" type="number" min="5" max="600" step="5" inputmode="numeric" required><span>minutes</span></div>
-            <small>Choose between 5 and 600 minutes.</small>
-          </label>
-
-          <label class="service-active-toggle">
-            <input v-model="form.is_active" type="checkbox">
-            <span><strong>Available for booking</strong><small>Patients can see and book this service.</small></span>
-            <span class="service-toggle-indicator" aria-hidden="true"></span>
-          </label>
-
-          <label class="service-field service-field-full">
-            <span>Description <em>Optional</em></span>
-            <textarea v-model="form.description" rows="3" maxlength="5000" placeholder="Briefly explain what this service includes and what patients can expect."></textarea>
-            <small>A short description helps patients choose the right service.</small>
-          </label>
-        </div>
-
-        <footer class="service-dialog-footer">
-          <p><i>*</i> Required information must be completed before saving.</p>
-          <div>
-            <button class="button button-quiet" type="button" :disabled="saving" @click="dialogOpen = false">Cancel</button>
-            <button class="button button-primary" :disabled="saving">{{ saving ? 'Saving service…' : editingId ? 'Save changes' : 'Add service' }}</button>
+  <Teleport to="body">
+    <div v-if="dialogOpen" class="service-dialog-backdrop" @click.self="!saving && (dialogOpen = false)">
+      <section class="surface service-dialog" role="dialog" aria-modal="true" aria-labelledby="service-dialog-title" aria-describedby="service-dialog-description">
+        <header class="service-dialog-heading">
+          <div class="service-dialog-title">
+            <p class="service-dialog-kicker">{{ editingId ? 'UPDATE SERVICE' : 'SERVICE CATALOG' }}</p>
+            <h2 id="service-dialog-title">{{ editingId ? 'Edit service details' : 'Add a clinic service' }}</h2>
+            <p id="service-dialog-description">{{ editingId ? 'Keep the service information and booking availability up to date.' : 'Add a service patients can understand and book at your clinic.' }}</p>
           </div>
-        </footer>
-      </form>
-    </section>
-  </div>
+          <button class="service-close-button" type="button" aria-label="Close dialog" :disabled="saving" @click="dialogOpen = false">×</button>
+        </header>
+
+        <form class="service-form" @submit.prevent="save">
+          <p v-if="error" class="service-form-error" role="alert">{{ error }}</p>
+
+          <div class="service-form-grid">
+            <label class="service-field service-field-full">
+              <span>Service name <i>Required</i></span>
+              <input v-model="form.service_name" maxlength="100" placeholder="e.g. Dental cleaning" autocomplete="off" required>
+              <small>Use a clear name patients will recognize.</small>
+            </label>
+
+            <label class="service-field">
+              <span>Category <em>Optional</em></span>
+              <input v-model="form.category" maxlength="50" placeholder="e.g. Preventive care">
+              <small>Helps organize your service catalog.</small>
+            </label>
+
+            <label class="service-field">
+              <span>Price <i>Required</i></span>
+              <div class="service-price-input"><span>₱</span><input v-model="form.price" type="number" min="0" step="0.01" placeholder="0.00" inputmode="decimal" required></div>
+              <small>Enter the amount in Philippine pesos.</small>
+            </label>
+
+            <label class="service-field">
+              <span>Appointment length <i>Required</i></span>
+              <div class="service-duration-input"><input v-model="form.duration_min" type="number" min="5" max="600" step="5" inputmode="numeric" required><span>minutes</span></div>
+              <small>Choose between 5 and 600 minutes.</small>
+            </label>
+
+            <label class="service-active-toggle">
+              <input v-model="form.is_active" type="checkbox">
+              <span><strong>Available for booking</strong><small>Patients can see and book this service.</small></span>
+              <span class="service-toggle-indicator" aria-hidden="true"></span>
+            </label>
+
+            <label class="service-field service-field-full">
+              <span>Description <em>Optional</em></span>
+              <textarea v-model="form.description" rows="3" maxlength="5000" placeholder="Briefly explain what this service includes and what patients can expect."></textarea>
+              <small>A short description helps patients choose the right service.</small>
+            </label>
+          </div>
+
+          <footer class="service-dialog-footer">
+            <p><i>*</i> Required information must be completed before saving.</p>
+            <div>
+              <button class="button button-quiet" type="button" :disabled="saving" @click="dialogOpen = false">Cancel</button>
+              <button class="button button-primary" :disabled="saving">{{ saving ? 'Saving service…' : editingId ? 'Save changes' : 'Add service' }}</button>
+            </div>
+          </footer>
+        </form>
+      </section>
+    </div>
+  </Teleport>
 </template>
 
 <style scoped>
@@ -284,8 +288,8 @@ onMounted(load)
 :deep(.data-table td strong:not(.service-price)) { color: #2f4358; font-size: 13.5px; }
 :deep(.data-table .table-secondary) { color: #66778a; font-size: 12px; line-height: 1.5; }
 :deep(.status-badge) { font-size: 11px; font-weight: 750; }
-.service-dialog-backdrop { position: fixed; inset: 0; z-index: 20; display: grid; place-items: center; overflow-y: auto; padding: 24px; background: rgb(25 37 47 / 58%); backdrop-filter: blur(4px); }
-.service-dialog { width: min(660px,100%); max-height: min(90vh,820px); overflow-y: auto; padding: clamp(20px,3vw,30px); border: 1px solid rgb(255 255 255 / 90%); border-radius: 18px; box-shadow: 0 28px 90px rgb(22 37 49 / 25%); }
+.service-dialog-backdrop { position: fixed; inset: 0; z-index: 100; display: grid; place-items: center; overflow-y: auto; overscroll-behavior: contain; padding: 24px; background: rgb(25 37 47 / 58%); backdrop-filter: blur(4px); }
+.service-dialog { width: min(660px,100%); max-height: min(90dvh,820px); overflow-y: auto; overscroll-behavior: contain; padding: clamp(20px,3vw,30px); border: 1px solid rgb(255 255 255 / 90%); border-radius: 18px; box-shadow: 0 28px 90px rgb(22 37 49 / 25%); }
 .service-dialog-heading { display: flex; align-items: flex-start; gap: 14px; margin-bottom: 24px; }
 .service-dialog-icon { display: grid; width: 42px; height: 42px; flex: 0 0 auto; place-items: center; border-radius: 13px; background: linear-gradient(145deg,#e4f6ed,#edf0ff); color: #438d75; font-size: 18px; }
 .service-dialog-title { min-width: 0; flex: 1; }
@@ -384,10 +388,14 @@ onMounted(load)
 :global(html[data-theme='dark'] .service-deactivate) { color: #e7a1a6; }
 :global(.app-shell[data-theme='dark'] .service-skeleton-line) { background: #34473f; }
 :global(.app-shell[data-theme='dark'] .service-skeleton-line::after) { background: linear-gradient(90deg, transparent, rgb(174 214 192 / 22%), transparent); }
-@media (max-width: 600px) {
+@media (max-width: 760px) {
   .services-heading { align-items: flex-start; flex-direction: column; gap: 12px; }
-  .service-dialog-backdrop { align-items: start; padding: 12px; }
-  .service-dialog { max-height: calc(100dvh - 24px); padding: 19px; }
+  .service-dialog-backdrop { align-items: start; padding: 16px; }
+  .service-dialog { max-height: calc(100dvh - 32px); padding: 19px; }
+}
+@media (max-width: 600px) {
+  .service-dialog-backdrop { padding: 12px; }
+  .service-dialog { max-height: calc(100dvh - 24px); }
   .service-form-grid { grid-template-columns: minmax(0,1fr); gap: 15px; }
   .service-field-full,.service-active-toggle { grid-column: auto; }
   .service-dialog-footer { align-items: stretch; flex-direction: column; }

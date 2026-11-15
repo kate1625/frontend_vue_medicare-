@@ -19,6 +19,7 @@
     "@fullcalendar/daygrid": "^6.1.22",
     "@fullcalendar/interaction": "^6.1.22",
     "@fullcalendar/timegrid": "^6.1.22",
+    "animejs": "^4.5.0",
     "chart.js": "^4.6.1",
     "jspdf": "^4.2.1",
     "jspdf-autotable": "^5.0.9",
