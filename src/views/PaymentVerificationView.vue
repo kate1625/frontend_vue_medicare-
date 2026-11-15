@@ -294,7 +294,7 @@ onMounted(load)
 
         <div v-if="row.verification_source === 'paymongo'" class="paymongo-alert">
           <UiIcon name="alert-circle" />
-          <span>PayMongo test checkout: staff verification is required after the checkout is completed.</span>
+          <span>Completed PayMongo test checkouts are confirmed directly with PayMongo before a receipt is issued.</span>
         </div>
 
         <div v-if="activeTab === 'pending'" class="card-actions">

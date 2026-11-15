@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
-import { ApiError, getApiData } from '../services/api'
+import { ApiError, apiRequest, getApiData } from '../services/api'
 import SkeletonLoader from '../components/SkeletonLoader.vue'
 
 async function loadQr() {
@@ -14,12 +14,55 @@ async function loadPdf() {
   return mod.default
 }
 interface Receipt { payment_id: number; receipt_no: string | null; amount: string; payment_plan: 'full'|'downpayment'; payment_percent: number|null; reference_no: string | null; status: string; paid_at: string | null; method_name: string; account_name: string | null; account_no: string | null; appt_date: string; appt_time: string; service_name: string; first_name: string; last_name: string }
-const route = useRoute(); const receipt = ref<Receipt | null>(null); const receipts = ref<Receipt[]>([]); const qr = ref(''); const loading = ref(true); const error = ref('')
-async function load() { loading.value = true; error.value = ''; receipt.value = null; receipts.value = []; qr.value = ''; const id = String(route.query.id || ''); try { if (/^\d+$/.test(id)) { receipt.value = await getApiData<Receipt>(`/api/payments/receipt/${id}`) } else { receipts.value = await getApiData<Receipt[]>('/api/payments/mine'); return } const QRCode = await loadQr()
-qr.value = await QRCode.toDataURL(
-  `Tooth Doctor receipt ${receipt.value.receipt_no} | Appointment ${receipt.value.payment_id} | Amount PHP ${receipt.value.amount}`,
-  { width: 180, margin: 1 },
-) } catch (cause) { error.value = cause instanceof ApiError ? cause.message : 'Could not load receipts.' } finally { loading.value = false } }
+const route = useRoute()
+const receipt = ref<Receipt | null>(null)
+const receipts = ref<Receipt[]>([])
+const qr = ref('')
+const loading = ref(true)
+const error = ref('')
+const paymentReturnPending = ref(false)
+const paymentReturnMessage = ref('')
+async function load() {
+  loading.value = true
+  error.value = ''
+  receipt.value = null
+  receipts.value = []
+  qr.value = ''
+  paymentReturnPending.value = false
+  paymentReturnMessage.value = ''
+  const id = String(route.query.id || '')
+  try {
+    if (/^\d+$/.test(id)) {
+      if (String(route.query.paymongo || '') === 'return') {
+        const result = await apiRequest<{ data: { status: string }; message: string }>('/api/payments/paymongo/confirm', {
+          method: 'POST',
+          body: JSON.stringify({ payment_id: Number(id), verify: true }),
+        })
+        paymentReturnMessage.value = result.message
+        if (result.data.status !== 'verified') {
+          paymentReturnPending.value = result.data.status === 'pending' || result.data.status === 'paid'
+          if (!paymentReturnPending.value) sessionStorage.removeItem('medicare.paymongoCheckoutUrl')
+          if (!paymentReturnPending.value) error.value = result.message
+          return
+        }
+        sessionStorage.removeItem('medicare.paymongoCheckoutUrl')
+      }
+      receipt.value = await getApiData<Receipt>(`/api/payments/receipt/${id}`)
+    } else {
+      receipts.value = await getApiData<Receipt[]>('/api/payments/mine')
+      return
+    }
+    const QRCode = await loadQr()
+    qr.value = await QRCode.toDataURL(
+      `Tooth Doctor receipt ${receipt.value.receipt_no} | Appointment ${receipt.value.payment_id} | Amount PHP ${receipt.value.amount}`,
+      { width: 180, margin: 1 },
+    )
+  } catch (cause) {
+    error.value = cause instanceof ApiError ? cause.message : 'Could not load receipts.'
+  } finally {
+    loading.value = false
+  }
+}
 async function exportPdf() {
   if (!receipt.value || receipt.value.status !== 'verified') return
   const r = receipt.value
@@ -125,7 +168,7 @@ async function exportPdf() {
   pdf.line(margin, 278, pageWidth - margin, 278)
   pdf.setFontSize(8)
   pdf.setTextColor(118, 135, 140)
-  pdf.text('This receipt confirms payment verified by Tooth Doctor Dental Clinic.', margin, 287)
+  pdf.text('This receipt confirms payment verified by PayMongo or Tooth Doctor Dental Clinic.', margin, 287)
   pdf.text('MediCare+ patient portal', margin, 294)
   pdf.setTextColor(25, 106, 83)
   pdf.text(receiptNo, pageWidth - margin, 294, { align: 'right' })
@@ -138,12 +181,18 @@ onMounted(load); watch(() => route.query.id, load)
     <section class="page-heading receipt-page-heading">
       <div>
         <h1>Payment Receipts</h1>
-        <p class="muted">Official receipts appear after payment is verified. For cash, the clinic releases the receipt when payment is received during your visit.</p>
+        <p class="muted">Official receipts appear after payment is confirmed. For cash, the clinic releases the receipt when payment is received during your visit.</p>
       </div>
       <button v-if="receipt?.status === 'verified'" class="button button-primary" @click="exportPdf">Download PDF</button>
     </section>
 
     <SkeletonLoader v-if="loading" variant="receipt" label="Loading your payment receipts" />
+    <section v-else-if="paymentReturnPending" class="surface empty-state">
+      <strong>Payment confirmation is still in progress</strong>
+      <p>{{ paymentReturnMessage }}</p>
+      <button class="button button-primary" type="button" @click="load">Check again</button>
+      <RouterLink to="/patient/payment">Return to payments</RouterLink>
+    </section>
     <section v-else-if="error" class="surface empty-state">
       <strong>Receipts unavailable</strong>
       <p>{{ error }}</p>
@@ -181,13 +230,13 @@ onMounted(load); watch(() => route.query.id, load)
             View receipt <span aria-hidden="true">→</span>
           </RouterLink>
           <span v-else class="receipt-unavailable">
-            {{ item.status === 'pending' ? 'Available after clinic confirmation' : 'No receipt issued' }}
+            {{ item.status === 'pending' ? 'Available after payment confirmation' : 'No receipt issued' }}
           </span>
         </article>
       </div>
       <div v-else class="empty-state">
         <strong>No payment receipts yet</strong>
-        <p>An official receipt will appear here after the clinic verifies payment.</p>
+        <p>An official receipt will appear here after the payment is confirmed.</p>
         <RouterLink to="/patient/payment">Go to payments</RouterLink>
       </div>
     </section>
@@ -201,7 +250,7 @@ onMounted(load); watch(() => route.query.id, load)
           {{ receipt.status === 'pending' ? 'Pending clinic verification' : receipt.status }}
         </span>
       </div>
-      <p class="receipt-detail-note">This official receipt confirms a payment verified by the clinic. Keep it for your records.</p>
+      <p class="receipt-detail-note">{{ paymentReturnMessage || 'This official receipt confirms a payment verified by PayMongo or the clinic. Keep it for your records.' }}</p>
       <dl>
         <dt>Patient</dt><dd>{{ receipt.first_name }} {{ receipt.last_name }}</dd>
         <dt>Service</dt><dd>{{ receipt.service_name }}</dd>
@@ -209,7 +258,7 @@ onMounted(load); watch(() => route.query.id, load)
         <dt>Payment plan</dt>
         <dd>{{ receipt.payment_plan === 'downpayment' ? `${receipt.payment_percent}% downpayment` : 'Full payment' }}</dd>
         <dt>Payment method</dt><dd>{{ receipt.method_name }}</dd>
-        <dt>Amount submitted</dt>
+        <dt>Amount paid</dt>
         <dd>₱{{ Number(receipt.amount).toLocaleString('en-PH', { minimumFractionDigits: 2 }) }}</dd>
         <dt>Reference</dt><dd>{{ receipt.reference_no || '—' }}</dd>
         <dt>Paid at</dt><dd>{{ receipt.paid_at || 'Pending clinic verification' }}</dd>

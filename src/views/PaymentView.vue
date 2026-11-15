@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onActivated, onBeforeUnmount, onDeactivated, onMounted, reactive, ref, watch } from 'vue'
 import { ApiError, apiRequest, getApiData } from '../services/api'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import SkeletonLoader from '../components/SkeletonLoader.vue'
 import { notify } from '../services/toast'
 
@@ -16,6 +16,7 @@ interface Charge { appointment_id:number; appt_date:string; appt_time:string; ap
 interface PaymentOverview { appointments: Appointment[]; methods: PaymentMethod[]; payments: Payment[]; charges: Charge[] }
 const PAYMONGO_CHECKOUT_URL_KEY = 'medicare.paymongoCheckoutUrl'
 const route = useRoute()
+const router = useRouter()
 function isPayMongoCheckoutUrl(value: string) {
   try {
     const url = new URL(value)
@@ -129,11 +130,17 @@ async function checkPayMongoReturn() {
   try {
     const result = await apiRequest<{ data: { status: string }; message: string }>('/api/payments/paymongo/confirm', {
       method: 'POST',
-      body: JSON.stringify({ payment_id: paymentId, verify: false }),
+      body: JSON.stringify({ payment_id: paymentId, verify: true }),
     })
     message.value = result.message
     notify.success(result.message, 'Payment update')
     receiptPaymentId.value = result.data.status === 'verified' ? paymentId : null
+    if (result.data.status === 'verified') {
+      paymongoCheckoutUrl.value = ''
+      sessionStorage.removeItem(PAYMONGO_CHECKOUT_URL_KEY)
+      await router.replace({ path: '/patient/receipt', query: { id: paymentId } })
+      return
+    }
     if (result.data.status !== 'pending') {
       paymongoCheckoutUrl.value = ''
       sessionStorage.removeItem(PAYMONGO_CHECKOUT_URL_KEY)
@@ -275,7 +282,7 @@ onBeforeUnmount(stopPaymentRefresh)
             <div class="payment-total"><span>Remaining balance</span><strong>{{ amountDue.toLocaleString('en-PH',{style:'currency',currency:'PHP'}) }}</strong></div>
           </template>
           <div v-else class="payment-summary-empty">Select an appointment to see its charges and remaining balance.</div>
-          <div class="payment-summary-footnote">Your payment status and balance are updated after clinic staff review and verify the payment.</div>
+          <div class="payment-summary-footnote">PayMongo confirms online payments. Cash and bank-transfer payments are updated after clinic staff verification.</div>
         </aside>
       </div>
 
