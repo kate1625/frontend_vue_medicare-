@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref } from 'vue'
+import { computed, nextTick, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref, watch } from 'vue'
 import { ApiError, apiRequest, getApiData, getPortalRole, getStaffUser } from '../services/api'
 import { useRoute } from 'vue-router'
 import SkeletonLoader from '../components/SkeletonLoader.vue'
@@ -42,6 +42,9 @@ interface MessageRow {
   body: string
   is_read: boolean | number | string
   created_at: string
+  reply_to_message_id?: number | null
+  reply_to_body?: string | null
+  reply_to_sender?: string | null
   delivery_status?: 'sending' | 'sent'
 }
 interface MessageContact {
@@ -75,6 +78,11 @@ const currentUser = getStaffUser()
 const currentUserId = currentUser?.id
 const selectedContactId = ref<number | null>(null)
 const selectedContact = computed(() => messageContacts.value.find((contact) => contact.user_id === selectedContactId.value))
+const replyTarget = ref<MessageRow | null>(null)
+const mobileContactsOpen = ref(false)
+const messageThreadElement = ref<HTMLDivElement | null>(null)
+const composerTextarea = ref<HTMLTextAreaElement | null>(null)
+const shouldAutoScrollMessages = ref(true)
 const filteredMessageContacts = computed(() => {
   const query = contactSearch.value.trim().toLocaleLowerCase()
   if (!query) return messageContacts.value
@@ -90,6 +98,14 @@ const sendingMessage = ref(false)
 let temporaryMessageId = -1
 let messageRefreshTimer: number | null = null
 let messagesPageActive = false
+watch(selectedContactId, () => {
+  replyTarget.value = null
+  shouldAutoScrollMessages.value = true
+  void scrollMessageThread(true)
+})
+watch(selectedMessages, () => {
+  void scrollMessageThread()
+})
 const form = ref<WorkspaceForm>({})
 const settings = ref<ClinicSettings>({
   clinic_name: 'MediCare+ Dental Clinic',
@@ -185,12 +201,31 @@ function handleProfilePictureChange() {
 function handleProfilePictureStorageChange(event: StorageEvent) {
   if (event.key?.startsWith('medicare.profile-picture.')) refreshProfilePictures()
 }
+async function scrollMessageThread(force = false) {
+  await nextTick()
+  const thread = messageThreadElement.value
+  if (!thread || (!force && !shouldAutoScrollMessages.value)) return
+  thread.scrollTo({ top: thread.scrollHeight, behavior: 'smooth' })
+}
+function updateMessageScrollState() {
+  const thread = messageThreadElement.value
+  if (!thread) return
+  shouldAutoScrollMessages.value = thread.scrollHeight - thread.scrollTop - thread.clientHeight < 72
+}
+async function startReply(message: MessageRow) {
+  if (message.message_id <= 0) return
+  replyTarget.value = message
+  await nextTick()
+  composerTextarea.value?.focus()
+}
 async function sendMessage() {
   const recipientId = selectedContactId.value
   const body = String(form.value.body ?? '').trim()
   if (!recipientId || !body || sendingMessage.value) return
 
   const temporaryId = temporaryMessageId--
+  const quotedMessage = replyTarget.value
+  shouldAutoScrollMessages.value = true
   const optimisticMessage: MessageRow = {
     message_id: temporaryId,
     sender_id: currentUserId ?? 0,
@@ -200,6 +235,9 @@ async function sendMessage() {
     body,
     is_read: 0,
     created_at: new Date().toISOString().slice(0, 19).replace('T', ' '),
+    reply_to_message_id: quotedMessage?.message_id ?? null,
+    reply_to_body: quotedMessage?.body ?? null,
+    reply_to_sender: quotedMessage?.sender ?? null,
     delivery_status: 'sending',
   }
   messages.value = [optimisticMessage, ...messages.value]
@@ -210,7 +248,11 @@ async function sendMessage() {
   try {
     const response = await apiRequest<{ data: { message_id: number } }>('/api/messages', {
       method: 'POST',
-      body: JSON.stringify({ recipient_id: recipientId, body }),
+      body: JSON.stringify({
+        recipient_id: recipientId,
+        body,
+        reply_to_message_id: quotedMessage?.message_id ?? null,
+      }),
     })
     const alreadyRefreshed = messages.value.some((message) => message.message_id === response.data.message_id)
     messages.value = messages.value
@@ -225,7 +267,10 @@ async function sendMessage() {
         delivery_status: 'sent',
       }, ...messages.value]
     }
-    form.value.body = ''
+    if (selectedContactId.value === recipientId) {
+      form.value.body = ''
+      if (replyTarget.value === quotedMessage) replyTarget.value = null
+    }
   } catch (cause) {
     messages.value = messages.value.filter((message) => message.message_id !== temporaryId)
     error.value = cause instanceof ApiError ? cause.message : 'Could not send this message.'
@@ -289,6 +334,9 @@ async function refreshMessages(loadContacts = false) {
 }
 async function selectContact(contactId:number){
   selectedContactId.value=contactId
+  mobileContactsOpen.value = false
+  replyTarget.value = null
+  shouldAutoScrollMessages.value = true
   form.value.recipient_id=contactId
   try {
     await refreshMessages()
@@ -354,24 +402,31 @@ onBeforeUnmount(() => {
     </template>
     <template v-else-if="kind==='prescriptions'"><section v-if="!patientMode" class="surface feature-state"><h2>Create prescription record</h2><p class="muted">A prescription is the dentist’s written medication plan, including the medicine and how the patient should take it. Record only instructions provided by the treating clinician.</p><div class="form-grid"><label>Patient<select v-model.number="form.patient_id"><option value="">Choose patient</option><option v-for="p in patientContacts" :key="p.id" :value="p.id">{{p.first_name}} {{p.last_name}}</option></select></label><label>Medication<input v-model="form.medication" required></label><label class="wide">Directions<textarea v-model="form.directions" rows="3" required/></label></div><button class="button button-primary" :disabled="busy" @click="save">Save prescription</button></section><section class="surface feature-state"><h2>{{patientMode?'Your prescriptions':'Prescription history'}}</h2><div v-if="!prescriptionRows.length" class="empty-state"><strong>No prescriptions have been recorded</strong><p v-if="patientMode">New instructions from your care team will appear here.</p></div><div v-for="r in prescriptionRows" :key="r.prescription_id" class="appointment-card"><div><strong>{{patientMode?'':`${r.patient_name} · `}}{{r.medication}}</strong><p>{{r.directions}}</p><small>{{r.created_at}}</small></div><span class="status-badge">{{r.status}}</span></div></section></template>
     <template v-else>
-      <section class="surface messenger">
+      <section :class="['surface messenger', { 'mobile-contacts-open': mobileContactsOpen }]">
         <aside class="messenger-contacts">
-          <h2>Conversations</h2>
+          <div class="contacts-panel-heading">
+            <h2>Conversations</h2>
+            <button class="mobile-contact-close" type="button" aria-label="Close conversations" @click="mobileContactsOpen = false">
+              <UiIcon name="x" />
+            </button>
+          </div>
           <label class="conversation-search">
             <UiIcon name="search" />
             <input v-model="contactSearch" type="search" placeholder="Search by name" aria-label="Search conversations by name">
           </label>
-          <button v-for="contact in filteredMessageContacts" :key="contact.user_id" :class="{selected:selectedContactId===contact.user_id, 'has-unread':Number(contact.unread_count)>0}" type="button" @click="selectContact(contact.user_id)">
-            <span class="contact-summary">
-              <span class="contact-avatar"><img v-if="profilePictures[contact.user_id]" :src="profilePictures[contact.user_id]" alt=""><span v-else>{{contactInitials(contact.username)}}</span></span>
-              <span class="contact-identity"><strong>{{contact.username}}</strong><small>{{contact.role_name}} · <span :class="['presence-label', { online: Number(contact.is_online) === 1 }]">{{Number(contact.is_online)===1?'Online':'Offline'}}</span></small></span>
-              <span v-if="Number(contact.unread_count)>0" class="unread-count" :aria-label="`${contact.username} sent ${contact.unread_count} new message${Number(contact.unread_count) === 1 ? '' : 's'}`">{{Number(contact.unread_count)>99?'New 99+':`New ${contact.unread_count}`}}</span>
-            </span>
-            <span v-if="contact.last_message" class="contact-preview">{{Number(contact.last_message_sender_id)===contact.user_id?`${contact.username}: `:'You: '}}{{contact.last_message}}</span>
-            <time v-if="contact.last_message_at" class="contact-time">{{contact.last_message_at}}</time>
-          </button>
-          <p v-if="!messageContacts.length" class="conversation-empty">No clinic contacts are available.</p>
-          <p v-else-if="!filteredMessageContacts.length" class="conversation-empty">No names match “{{ contactSearch.trim() }}”.</p>
+          <div id="message-conversation-list" class="conversation-list" aria-label="Conversations">
+            <button v-for="contact in filteredMessageContacts" :key="contact.user_id" :class="{selected:selectedContactId===contact.user_id, 'has-unread':Number(contact.unread_count)>0}" type="button" @click="selectContact(contact.user_id)">
+              <span class="contact-summary">
+                <span class="contact-avatar"><img v-if="profilePictures[contact.user_id]" :src="profilePictures[contact.user_id]" alt=""><span v-else>{{contactInitials(contact.username)}}</span></span>
+                <span class="contact-identity"><strong>{{contact.username}}</strong><small>{{contact.role_name}} · <span :class="['presence-label', { online: Number(contact.is_online) === 1 }]">{{Number(contact.is_online)===1?'Online':'Offline'}}</span></small></span>
+                <span v-if="Number(contact.unread_count)>0" class="unread-count" :aria-label="`${contact.username} sent ${contact.unread_count} new message${Number(contact.unread_count) === 1 ? '' : 's'}`">{{Number(contact.unread_count)>99?'New 99+':`New ${contact.unread_count}`}}</span>
+              </span>
+              <span v-if="contact.last_message" class="contact-preview">{{Number(contact.last_message_sender_id)===contact.user_id?`${contact.username}: `:'You: '}}{{contact.last_message}}</span>
+              <time v-if="contact.last_message_at" class="contact-time">{{contact.last_message_at}}</time>
+            </button>
+            <p v-if="!messageContacts.length" class="conversation-empty">No clinic contacts are available.</p>
+            <p v-else-if="!filteredMessageContacts.length" class="conversation-empty">No names match “{{ contactSearch.trim() }}”.</p>
+          </div>
         </aside>
         <div class="messenger-thread">
           <header>
@@ -380,21 +435,37 @@ onBeforeUnmount(() => {
               <div><h2>{{selectedContact.username}}</h2><p :class="['presence-label', { online: Number(selectedContact.is_online) === 1 }]"><span class="presence-dot"></span>{{Number(selectedContact.is_online)===1?'Online':'Offline'}}</p></div>
             </div>
             <div v-else><h2>Clinic messages</h2><p class="muted">Private messages with your care team.</p></div>
+            <button class="mobile-conversations-toggle" type="button" :aria-expanded="mobileContactsOpen" aria-controls="message-conversation-list" @click="mobileContactsOpen = true">
+              <UiIcon name="users-round" />
+              <span>Conversations</span>
+            </button>
           </header>
-          <div class="message-thread" aria-live="polite">
+          <div ref="messageThreadElement" class="message-thread" aria-live="polite" @scroll="updateMessageScrollState">
             <p v-if="!selectedContactId" class="empty-state">Choose a contact to open a conversation.</p>
             <p v-else-if="!selectedMessages.length" class="empty-state">No messages yet. Send a message to start the conversation.</p>
-            <article v-for="m in selectedMessages" :key="m.message_id" :class="['message-bubble',{outgoing:m.sender_id===currentUserId}]">
+            <article v-for="m in selectedMessages" :key="m.message_id" :class="['message-bubble',{outgoing:m.sender_id===currentUserId}]" :data-message-id="m.message_id">
               <small class="message-meta"><span class="message-avatar"><img v-if="profilePictures[m.sender_id]" :src="profilePictures[m.sender_id]" alt=""><span v-else>{{contactInitials(m.sender)}}</span></span>{{m.sender}} · {{m.created_at}}</small>
+              <div v-if="m.reply_to_message_id" class="message-reply-quote">
+                <span class="reply-quote-accent"></span>
+                <span class="reply-quote-content"><strong>{{m.reply_to_sender || 'Message'}}</strong><span>{{m.reply_to_body || 'Original message unavailable'}}</span></span>
+              </div>
               <p>{{m.body}}</p>
               <small v-if="m.sender_id===currentUserId" class="delivery-status">
                 <span v-if="m.delivery_status==='sending'" class="sending-indicator"><span class="loading-spinner"></span>Sending…</span>
                 <span v-else>{{Number(m.is_read)===1?'Seen ✓✓':'Sent ✓'}}</span>
               </small>
+              <button v-if="m.message_id > 0" class="message-reply-action" type="button" :aria-label="`Reply to message from ${m.sender}`" :title="`Reply to ${m.sender}`" @click="startReply(m)">
+                <UiIcon name="reply" />
+              </button>
             </article>
           </div>
           <form class="message-composer" @submit.prevent="sendMessage">
-            <textarea v-model="form.body" rows="2" maxlength="5000" placeholder="Write a message…" required :disabled="!selectedContactId || sendingMessage"></textarea>
+            <div v-if="replyTarget" class="reply-composer-preview">
+              <span class="reply-quote-accent"></span>
+              <span class="reply-preview-content"><strong>Replying to {{replyTarget.sender}}</strong><span>{{replyTarget.body}}</span></span>
+              <button class="cancel-reply" type="button" aria-label="Cancel reply" @click="replyTarget = null">×</button>
+            </div>
+            <textarea ref="composerTextarea" v-model="form.body" rows="2" maxlength="5000" placeholder="Write a message…" required :disabled="!selectedContactId || sendingMessage"></textarea>
             <button class="button button-primary" :disabled="busy||sendingMessage||!selectedContactId||!String(form.body||'').trim()">
               <span v-if="sendingMessage" class="button-sending"><span class="loading-spinner"></span>Sending…</span>
               <span v-else>Send</span>
@@ -662,6 +733,428 @@ onBeforeUnmount(() => {
     z-index: 1;
     top: 34px;
     margin-bottom: 7px;
+  }
+}
+
+:global(.app-shell.messages-shell) {
+  height: 100vh;
+  height: 100dvh;
+  min-height: 0;
+  overflow: hidden;
+}
+:global(.app-shell.messages-shell .main-column) {
+  display: flex;
+  height: 100%;
+  min-height: 0;
+  flex-direction: column;
+  overflow: hidden;
+}
+:global(.app-shell.messages-shell .topbar) {
+  flex: 0 0 auto;
+}
+:global(.app-shell.messages-shell .page-content) {
+  display: flex;
+  min-height: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  overflow: hidden;
+  padding-bottom: 18px;
+}
+:global(.app-shell.messages-shell .page-heading) {
+  flex: 0 0 auto;
+  margin-bottom: 16px;
+}
+.messenger {
+  min-height: 0;
+  flex: 1 1 auto;
+  grid-template-columns: minmax(250px, 30%) minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+}
+.messenger-contacts {
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
+  overflow: hidden;
+}
+.messenger-contacts h2,
+.conversation-search {
+  flex: 0 0 auto;
+}
+.contacts-panel-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.mobile-contact-close,
+.mobile-conversations-toggle {
+  display: none;
+}
+.conversation-list {
+  display: grid;
+  min-height: 0;
+  flex: 1 1 auto;
+  align-content: start;
+  gap: 4px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-right: 4px;
+  scrollbar-width: thin;
+}
+.conversation-list button {
+  margin: 0;
+}
+.messenger-thread {
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+.message-thread {
+  min-height: 0;
+  flex: 1 1 auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+}
+.message-composer {
+  display: grid;
+  flex: 0 0 auto;
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+.reply-composer-preview {
+  display: flex;
+  min-width: 0;
+  grid-column: 1 / -1;
+  align-items: stretch;
+  gap: 10px;
+  padding: 9px 10px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--surface) 88%, #73b28d 12%);
+}
+.reply-quote-accent {
+  width: 3px;
+  flex: 0 0 3px;
+  border-radius: 3px;
+  background: #4b9b70;
+}
+.reply-preview-content,
+.message-reply-quote .reply-quote-content {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+.reply-preview-content strong,
+.message-reply-quote strong {
+  color: #387753;
+  font-size: 11px;
+}
+.reply-preview-content span,
+.message-reply-quote .reply-quote-content > span {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cancel-reply {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  flex: 0 0 auto;
+  place-items: center;
+  margin-left: auto;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 20px;
+  line-height: 1;
+}
+.cancel-reply:hover {
+  background: rgb(80 110 95 / 10%);
+  color: var(--ink);
+}
+.message-reply-quote {
+  display: flex;
+  min-width: 0;
+  gap: 8px;
+  margin: 8px 0 6px;
+  padding: 7px 8px;
+  border: 1px solid rgb(88 132 105 / 15%);
+  border-radius: 9px;
+  background: rgb(255 255 255 / 54%);
+}
+.message-reply-quote .reply-quote-content > span {
+  max-width: 100%;
+}
+.message-reply-action {
+  position: absolute;
+  z-index: 1;
+  top: 7px;
+  right: 7px;
+  display: grid;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  background: var(--surface);
+  box-shadow: 0 4px 12px rgb(22 46 36 / 16%);
+  color: #438d75;
+  cursor: pointer;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(7px) scale(.55) rotate(-24deg);
+  transition: opacity 150ms ease, transform 210ms cubic-bezier(.2, .8, .25, 1), visibility 0s linear 210ms;
+  visibility: hidden;
+}
+.message-reply-action :deep(svg) {
+  width: 15px;
+  height: 15px;
+}
+.message-bubble:hover .message-reply-action,
+.message-bubble:focus-within .message-reply-action {
+  animation: reply-icon-reveal 360ms cubic-bezier(.2, 1.45, .4, 1) both;
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateY(0) scale(1) rotate(0);
+  transition-delay: 0s;
+  visibility: visible;
+}
+.message-reply-action:hover,
+.message-reply-action:focus-visible {
+  border-color: #9ac9aa;
+  background: #edf8f0;
+  box-shadow: 0 6px 16px rgb(36 111 67 / 24%);
+  color: #2d7549;
+  outline: 3px solid rgb(67 141 117 / 20%);
+  outline-offset: 2px;
+}
+.message-bubble {
+  position: relative;
+  padding-right: 43px;
+}
+.message-meta {
+  padding-right: 25px;
+}
+@keyframes reply-icon-reveal {
+  0% {
+    opacity: 0;
+    transform: translateY(9px) scale(.45) rotate(-28deg);
+  }
+  72% {
+    opacity: 1;
+    transform: translateY(-2px) scale(1.12) rotate(5deg);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1) rotate(0);
+  }
+}
+:global(.app-shell[data-theme='dark'] .reply-composer-preview) {
+  border-color: #40534b;
+  background: #23352c;
+}
+:global(.app-shell[data-theme='dark'] .reply-preview-content strong),
+:global(.app-shell[data-theme='dark'] .message-reply-quote strong),
+:global(.app-shell[data-theme='dark'] .message-reply-action) {
+  color: #a4e2ba;
+}
+:global(.app-shell[data-theme='dark'] .message-reply-quote) {
+  border-color: rgb(164 226 186 / 15%);
+  background: rgb(11 22 17 / 22%);
+}
+:global(.app-shell[data-theme='dark'] .cancel-reply) {
+  color: #a3b3ae;
+}
+ :global(.app-shell[data-theme='dark'] .message-reply-action) {
+  border-color: #40534b;
+  background: #263630;
+  box-shadow: 0 4px 12px rgb(0 0 0 / 24%);
+  color: #a4e2ba;
+}
+:global(.app-shell[data-theme='dark'] .message-reply-action:hover),
+:global(.app-shell[data-theme='dark'] .message-reply-action:focus-visible) {
+  border-color: #70a985;
+  background: #294b36;
+  color: #d3f0dd;
+  outline-color: rgb(164 226 186 / 24%);
+}
+@media (hover: none) {
+  .message-reply-action {
+    opacity: 1;
+    pointer-events: auto;
+    transform: none;
+    transition: none;
+    visibility: visible;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .message-reply-action,
+  .message-bubble:hover .message-reply-action,
+  .message-bubble:focus-within .message-reply-action {
+    animation: none;
+    transition: none;
+  }
+}
+@media (max-width: 700px) {
+  :global(.app-shell.messages-shell .page-content) {
+    padding: 18px 12px 12px;
+  }
+  :global(.app-shell.messages-shell .page-heading) {
+    margin-bottom: 12px;
+  }
+  .messenger {
+    position: relative;
+    display: flex;
+    min-height: 0;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  .messenger-contacts {
+    position: absolute;
+    z-index: 5;
+    inset: 0;
+    display: flex;
+    width: 100%;
+    height: 100%;
+    min-height: 0;
+    max-height: none;
+    flex: 0 0 auto;
+    flex-direction: column;
+    gap: 0;
+    grid-template-columns: none;
+    padding: 16px;
+    border-right: 0;
+    border-bottom: 0;
+    opacity: 0;
+    pointer-events: none;
+    transform: translateX(-14px);
+    transition: opacity 180ms ease, transform 240ms cubic-bezier(.2, .8, .25, 1), visibility 0s linear 240ms;
+    visibility: hidden;
+  }
+  .messenger.mobile-contacts-open .messenger-contacts {
+    opacity: 1;
+    pointer-events: auto;
+    transform: translateX(0);
+    transition-delay: 0s;
+    visibility: visible;
+  }
+  .contacts-panel-heading {
+    flex: 0 0 auto;
+    margin-bottom: 12px;
+  }
+  .messenger-contacts h2 {
+    width: auto;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    background: transparent;
+  }
+  .mobile-contact-close {
+    display: grid;
+    width: 34px;
+    height: 34px;
+    place-items: center;
+    border: 1px solid var(--line);
+    border-radius: 11px;
+    background: var(--surface);
+    color: var(--ink);
+    cursor: pointer;
+  }
+  .mobile-contact-close :deep(svg) {
+    width: 17px;
+    height: 17px;
+  }
+  .conversation-search {
+    position: relative;
+    top: auto;
+    min-height: 42px;
+    flex: 0 0 auto;
+    margin-bottom: 10px;
+  }
+  .conversation-list {
+    width: 100%;
+    flex: 1 1 auto;
+    padding-right: 2px;
+  }
+  .messenger-contacts button {
+    width: 100%;
+  }
+  .messenger-thread {
+    min-height: 0;
+    flex: 1 1 auto;
+    padding: 12px;
+  }
+  .messenger-thread > header {
+    display: flex;
+    min-height: 52px;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding-bottom: 10px;
+  }
+  .conversation-heading {
+    min-width: 0;
+    flex: 1 1 auto;
+  }
+  .conversation-heading > div {
+    min-width: 0;
+  }
+  .conversation-heading h2 {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .mobile-conversations-toggle {
+    display: inline-flex;
+    min-height: 36px;
+    flex: 0 0 auto;
+    align-items: center;
+    justify-content: center;
+    gap: 7px;
+    padding: 0 10px;
+    border: 1px solid var(--line);
+    border-radius: 11px;
+    background: var(--surface);
+    color: var(--ink);
+    cursor: pointer;
+    font: inherit;
+    font-size: 11px;
+    font-weight: 650;
+  }
+  .mobile-conversations-toggle :deep(svg) {
+    width: 16px;
+    height: 16px;
+    color: #438d75;
+  }
+  .message-thread {
+    min-height: 0;
+    flex: 1 1 auto;
+    padding: 10px 0;
+  }
+  .message-composer {
+    align-items: end;
+  }
+}
+@media (max-height: 620px) {
+  :global(.app-shell.messages-shell .page-content) {
+    padding-top: 12px;
+    padding-bottom: 8px;
+  }
+  :global(.app-shell.messages-shell .page-heading) {
+    margin-bottom: 8px;
+  }
+  .messenger-contacts,
+  .messenger-thread {
+    padding: 12px;
+  }
+  .conversation-heading {
+    padding-bottom: 6px;
+  }
+  .message-composer textarea {
+    max-height: 90px;
   }
 }
 </style>

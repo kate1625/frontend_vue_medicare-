@@ -517,7 +517,7 @@ async function confirmSignOut() {
   </Transition>
   <RouterView v-if="isPublicPage" />
 
-  <div v-show="!isPublicPage" class="app-shell" :class="{ 'sidebar-collapsed': sidebarCollapsed }" :data-theme="isDarkMode ? 'dark' : 'light'">
+  <div v-show="!isPublicPage" class="app-shell" :class="{ 'sidebar-collapsed': sidebarCollapsed, 'messages-shell': route.path.endsWith('/messages') }" :data-theme="isDarkMode ? 'dark' : 'light'">
     <aside class="sidebar" :class="{ open: mobileOpen, 'sidebar-role-compact': role === 'patient' || role === 'admin' }">
       <div class="sidebar-header">
         <RouterLink

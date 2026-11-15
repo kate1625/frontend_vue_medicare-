@@ -198,7 +198,7 @@ onBeforeUnmount(() => {
   <div class="dashboard-page" :class="{ 'admin-dashboard': isAdmin }">
     <section class="page-heading">
       <div>
-
+        <p class="eyebrow">{{ isAdmin ? 'CLINIC OVERVIEW' : 'STAFF OVERVIEW' }}</p>
         <h1>{{ isAdmin ? 'Admin Dashboard' : 'Staff Dashboard' }}</h1>
         <p class="muted">Live clinic totals and activity from the clinic database.</p>
       </div>
@@ -291,3 +291,206 @@ onBeforeUnmount(() => {
     </template>
   </div>
 </template>
+
+<style scoped>
+.admin-dashboard > .page-heading {
+  margin-bottom: 20px;
+}
+
+.admin-dashboard > .page-heading .eyebrow {
+  margin: 0 0 5px;
+  font-size: 10px;
+  font-weight: 750;
+  letter-spacing: 1.2px;
+}
+
+.admin-dashboard > .page-heading h1 {
+  margin-top: 0;
+  margin-bottom: 4px;
+  letter-spacing: -0.65px;
+}
+
+.admin-dashboard > .page-heading .muted {
+  margin-top: 0;
+  font-size: 13px;
+}
+
+.admin-dashboard > .stats-grid {
+  gap: 14px;
+  margin-bottom: 17px;
+}
+
+.admin-dashboard > .stats-grid .stat-card {
+  position: relative;
+  overflow: hidden;
+  min-height: 124px;
+  padding: 17px 19px;
+  border: 1px solid var(--line);
+  border-radius: 17px;
+  background: linear-gradient(145deg, var(--surface), color-mix(in srgb, var(--surface) 92%, #e8f4ec));
+  box-shadow: var(--shadow);
+  transition: border-color .2s ease, box-shadow .2s ease, transform .2s ease;
+}
+
+.admin-dashboard > .stats-grid .stat-card::before {
+  position: absolute;
+  top: 0;
+  left: 19px;
+  width: 36px;
+  height: 3px;
+  border-radius: 0 0 4px 4px;
+  background: #438d75;
+  content: '';
+}
+
+.admin-dashboard > .stats-grid .stat-card:hover {
+  transform: translateY(-2px);
+  border-color: #b7d9c6;
+  box-shadow: 0 15px 32px rgb(39 70 56 / 10%);
+}
+
+.admin-dashboard > .stats-grid .stat-card > .stat-icon,
+.admin-dashboard .dashboard-shortcut .stat-icon {
+  width: 36px;
+  height: 36px;
+  border: 1px solid #dceee3;
+  border-radius: 12px;
+  background: #e8f4ec;
+  color: #438d75;
+}
+
+.admin-dashboard > .stats-grid .stat-card > p {
+  margin: 10px 0 2px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.admin-dashboard > .stats-grid .stat-card > strong {
+  color: var(--ink);
+  font-size: clamp(24px, 2vw, 29px);
+  letter-spacing: -0.7px;
+}
+
+.admin-dashboard > .stats-grid .stat-card > small {
+  display: block;
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.admin-dashboard > .stats-grid .stat-card-balance > strong {
+  font-size: clamp(20px, 1.8vw, 25px);
+}
+
+.admin-dashboard .dashboard-shortcuts {
+  gap: 12px;
+  margin-bottom: 17px;
+}
+
+.admin-dashboard .dashboard-shortcut {
+  min-height: 62px;
+  border-color: var(--line);
+  border-radius: 14px;
+  box-shadow: 0 7px 20px rgb(39 70 56 / 5%);
+}
+
+.admin-dashboard .dashboard-shortcut .stat-icon {
+  flex: 0 0 36px;
+}
+
+.admin-dashboard .dashboard-shortcut .shortcut-arrow {
+  color: #438d75;
+}
+
+.admin-dashboard .dashboard-shortcut:focus-visible {
+  outline: 3px solid rgb(67 141 117 / 28%);
+  outline-offset: 2px;
+}
+
+.admin-dashboard .report-grid {
+  gap: 15px;
+}
+
+.admin-dashboard .report-card {
+  padding: 20px;
+}
+
+.admin-dashboard .report-card h2 {
+  margin-bottom: 14px;
+  padding-bottom: 12px;
+  font-size: 15px;
+}
+
+.admin-dashboard .report-chart {
+  height: 260px;
+}
+
+:global(:root[data-theme='dark'] .admin-dashboard > .stats-grid .stat-card) {
+  border-color: #334741;
+  background: linear-gradient(145deg, #202e2a, #1d2b26);
+}
+
+:global(:root[data-theme='dark'] .admin-dashboard > .stats-grid .stat-card::before) {
+  background: #73bd92;
+}
+
+:global(:root[data-theme='dark'] .admin-dashboard > .stats-grid .stat-card:hover) {
+  border-color: #52775f;
+  box-shadow: 0 15px 32px rgb(0 0 0 / 20%);
+}
+
+:global(:root[data-theme='dark'] .admin-dashboard > .stats-grid .stat-card > .stat-icon),
+:global(:root[data-theme='dark'] .admin-dashboard .dashboard-shortcut .stat-icon) {
+  border-color: #3c5949;
+  background: #294b3b;
+  color: #a4e2ba;
+}
+
+:global(:root[data-theme='dark'] .admin-dashboard .dashboard-shortcut .shortcut-arrow) {
+  color: #a4e2ba;
+}
+
+:global(:root[data-theme='dark'] .admin-dashboard .dashboard-shortcut:focus-visible) {
+  outline-color: rgb(164 226 186 / 35%);
+}
+
+@media (max-width: 700px) {
+  .admin-dashboard > .stats-grid .stat-card {
+    min-height: 126px;
+    padding: 15px 13px 14px 54px;
+  }
+
+  .admin-dashboard > .stats-grid .stat-card > .stat-icon {
+    top: 16px;
+    left: 13px;
+    width: 32px;
+    height: 32px;
+  }
+
+  .admin-dashboard > .stats-grid .stat-card > p {
+    min-height: 34px;
+    margin: 0 0 4px;
+    font-size: 12px;
+    line-height: 1.4;
+  }
+
+  .admin-dashboard > .stats-grid .stat-card > strong {
+    overflow-wrap: anywhere;
+    font-size: clamp(20px, 5vw, 25px);
+    line-height: 1.2;
+  }
+
+  .admin-dashboard > .stats-grid .stat-card > small {
+    margin-top: 6px;
+    font-size: 10px;
+  }
+}
+
+@media (max-width: 360px) {
+  .admin-dashboard > .stats-grid .stat-card {
+    padding-left: 54px;
+  }
+}
+</style>

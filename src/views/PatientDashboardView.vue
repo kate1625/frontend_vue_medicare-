@@ -159,7 +159,7 @@ onBeforeUnmount(() => {
 </script>
 <template>
   <div class="dashboard-page">
-  <section class="page-heading"><div><p class="eyebrow"></p><h1>Welcome{{ data ? `, ${data.patient.first_name}` : '' }}</h1><p class="muted">Your upcoming appointments, payments, and dental care updates.</p></div><RouterLink class="button button-primary" to="/patient/book">Book appointment <UiIcon name="arrow-right" /></RouterLink></section>
+  <section class="page-heading patient-welcome"><div class="welcome-copy"><p class="eyebrow">YOUR CARE, IN ONE PLACE</p><h1>Welcome{{ data ? `, ${data.patient.first_name}` : '' }}</h1><p class="muted">Your upcoming appointments, payments, and dental care updates.</p></div><RouterLink class="button button-primary" to="/patient/book">Book appointment <UiIcon name="arrow-right" /></RouterLink></section>
   <SkeletonLoader v-if="loading" variant="patient-dashboard" label="Loading your dashboard" />
   <section v-else-if="error" class="surface empty-state"><strong>Dashboard unavailable</strong><p>{{ error }}</p><button class="button button-quiet" type="button" @click="loadDashboard">Try again</button></section>
   <template v-else-if="data">
@@ -175,37 +175,502 @@ onBeforeUnmount(() => {
       <article class="stat-card"><span class="stat-icon stat-icon-green"><UiIcon name="check-circle" /></span><p>Completed visits</p><strong>{{ data.summary.completed || 0 }}</strong><small>Your recorded appointments</small></article>
     </section>
 
-    <section class="surface feature-state patient-upcoming"><div class="section-heading"><div><h2>Your next visits</h2><p class="muted">Your upcoming bookings, straight from the clinic schedule.</p></div><RouterLink class="text-link" to="/patient/appointments">All appointments <UiIcon name="arrow-right" /></RouterLink></div>
+    <section class="surface feature-state patient-upcoming"><div class="section-heading"><div class="patient-section-heading"><span class="patient-section-icon" aria-hidden="true"><UiIcon name="calendar" /></span><div><h2>Your next visits</h2><p class="muted">Your upcoming bookings, straight from the clinic schedule.</p></div></div><RouterLink class="text-link" to="/patient/appointments">All appointments <UiIcon name="arrow-right" /></RouterLink></div>
       <div v-if="!upcoming.length" class="empty-state"><strong>No upcoming visits</strong><p>Ready to plan your next checkup?</p><RouterLink class="button button-primary" to="/patient/book">Find an appointment</RouterLink></div>
       <div v-else class="appointment-list"><article v-for="item in upcoming" :key="item.appointment_id" class="appointment-card"><span class="visit-date"><strong>{{ dayOfMonth(item.appt_date) }}</strong><small>{{ monthOfDate(item.appt_date) }}</small></span><div class="visit-detail"><strong>{{ item.service_name }}</strong><p>{{ formatDate(item.appt_date) }} at {{ item.appt_time }} · {{ item.dentist || 'Dentist to be assigned' }}</p></div><span class="status-badge" :class="`status-${item.status}`">{{ item.status }}</span></article></div>
     </section>
 
-    <section class="patient-lower-grid"><section class="surface report-card dashboard-chart"><h2>Your visit history</h2><p v-if="!data.appointment_history.length" class="muted">Completed visits will appear here.</p><div v-else class="report-chart"><canvas ref="chartCanvas" /></div></section>
-    <section class="surface feature-state patient-activity"><div class="section-heading"><div><h2>Recent activity</h2><p class="muted">Updates from your clinic record.</p></div></div><div v-if="!data.recent_activity.length" class="empty-state"><p>New appointment and visit updates will appear here.</p></div><div v-else class="activity-list"><article v-for="(item,index) in data.recent_activity" :key="`${item.activity_type}-${item.appointment_id}-${item.activity_date}-${index}`"><span class="activity-dot" :class="`activity-${item.activity_type}`"></span><div><strong>{{ item.description }}</strong><p>{{ formatActivityDate(item.activity_date) }}<span v-if="item.status"> · {{ item.status.replace('_',' ') }}</span></p></div></article></div></section></section>
+    <section class="patient-lower-grid"><section class="surface report-card dashboard-chart"><h2>Your visit history</h2><div v-if="!data.appointment_history.length" class="history-empty"><span class="history-empty-icon"><UiIcon name="calendar" /></span><div><strong>Your care journey starts here</strong><p>Completed visits will show here so you can keep track of your care.</p></div></div><div v-else class="report-chart"><canvas ref="chartCanvas" /></div></section>
+    <section class="surface feature-state patient-activity"><div class="section-heading"><div class="patient-section-heading"><span class="patient-section-icon" aria-hidden="true"><UiIcon name="activity" /></span><div><h2>Recent activity</h2><p class="muted">Updates from your clinic record.</p></div></div></div><div v-if="!data.recent_activity.length" class="empty-state"><p>New appointment and visit updates will appear here.</p></div><div v-else class="activity-list"><article v-for="(item,index) in data.recent_activity" :key="`${item.activity_type}-${item.appointment_id}-${item.activity_date}-${index}`"><span class="activity-dot" :class="`activity-${item.activity_type}`"></span><div><strong>{{ item.description }}</strong><p>{{ formatActivityDate(item.activity_date) }}<span v-if="item.status"> · {{ item.status.replace('_',' ') }}</span></p></div></article></div></section></section>
 
-    <section class="surface feature-state"><div class="section-heading"><div><h2>Recent appointments</h2><p class="muted">Your appointment history</p></div><RouterLink class="text-link" to="/patient/appointments">View history <UiIcon name="arrow-right" /></RouterLink></div><div v-if="!data.appointments.length" class="empty-state"><strong>No appointments yet</strong><p>Your appointment history will appear here.</p><RouterLink to="/patient/book">Choose a service and time</RouterLink></div><div v-else class="appointment-list"><article v-for="item in data.appointments" :key="item.appointment_id" class="appointment-card"><div><strong>{{ item.service_name }}</strong><p>{{ formatDate(item.appt_date) }} at {{ item.appt_time }} · {{ item.dentist || 'Dentist to be assigned' }}</p></div><span class="status-badge" :class="`status-${item.status}`">{{ item.status.replace('_',' ') }}</span></article></div></section>
+    <section class="surface feature-state patient-history"><div class="section-heading"><div class="patient-section-heading"><span class="patient-section-icon" aria-hidden="true"><UiIcon name="clipboard-list" /></span><div><h2>Recent appointments</h2><p class="muted">Your latest bookings and their status.</p></div></div><RouterLink class="text-link" to="/patient/appointments">View history <UiIcon name="arrow-right" /></RouterLink></div><div v-if="!data.appointments.length" class="empty-state"><strong>No appointments yet</strong><p>Your appointment history will appear here.</p><RouterLink to="/patient/book">Choose a service and time</RouterLink></div><div v-else class="appointment-list patient-history-list"><article v-for="item in data.appointments" :key="item.appointment_id" class="appointment-card patient-history-card"><span class="patient-history-date"><strong>{{ dayOfMonth(item.appt_date) }}</strong><small>{{ monthOfDate(item.appt_date) }}</small></span><div class="patient-history-copy"><strong>{{ item.service_name }}</strong><p>{{ formatDate(item.appt_date) }} at {{ item.appt_time }} · {{ item.dentist || 'Dentist to be assigned' }}</p></div><span class="status-badge" :class="`status-${item.status}`">{{ item.status.replace('_',' ') }}</span></article></div></section>
   </template>
   </div>
 </template>
 
 <style scoped>
-.dashboard-page :deep(.stat-icon-green),
-.dashboard-page :deep(.stat-icon-blue),
-.dashboard-page :deep(.stat-icon-amber) {
-  background: #e7f5ee;
-  color: #379a6b;
+.patient-welcome {
+  position: relative;
+  overflow: hidden;
+  justify-content: space-between;
+  gap: 20px;
+  margin-bottom: 18px;
+  padding: 23px 25px;
+  border: 1px solid #e3efe8;
+  border-radius: 20px;
+  background: linear-gradient(112deg, #fff 0%, #f2faf5 70%, #f2f1ff 100%);
+  box-shadow: 0 12px 30px rgb(53 82 66 / 6%);
 }
 
-:global(.app-shell[data-theme='dark'] .dashboard-page .stat-icon-green),
-:global(.app-shell[data-theme='dark'] .dashboard-page .stat-icon-blue),
-:global(.app-shell[data-theme='dark'] .dashboard-page .stat-icon-amber) {
+.patient-welcome::after {
+  position: absolute;
+  top: -88px;
+  right: 12%;
+  width: 210px;
+  height: 210px;
+  border-radius: 50%;
+  background: rgb(111 190 150 / 9%);
+  content: '';
+  pointer-events: none;
+}
+
+.welcome-copy,
+.patient-welcome > .button {
+  position: relative;
+  z-index: 1;
+}
+
+.patient-welcome .eyebrow {
+  margin: 0 0 4px;
+  color: #578875;
+  font-size: 10px;
+  font-weight: 750;
+  letter-spacing: 1.35px;
+}
+
+.patient-welcome h1 {
+  margin: 0;
+  font-size: clamp(24px, 2.2vw, 30px);
+  letter-spacing: -0.7px;
+}
+
+.patient-welcome .muted {
+  margin: 5px 0 0;
+  font-size: 13px;
+}
+
+.patient-summary {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 13px;
+  margin: 0 0 17px;
+}
+
+.patient-summary .stat-card {
+  min-height: 120px;
+  padding: 16px 18px;
+}
+
+.patient-summary .stat-card p {
+  margin: 9px 0 1px;
+}
+
+.patient-summary .stat-card strong {
+  font-size: 27px;
+}
+
+.balance-number {
+  font-size: 23.8px !important;
+}
+
+.dashboard-page :deep(.stat-icon) {
+  background: #e7f5ee;
+  color: #438d75;
+}
+
+.patient-upcoming {
+  padding: 0 21px 8px;
+  border-color: #e4ede8;
+}
+
+.patient-upcoming .section-heading,
+.patient-activity .section-heading {
+  padding: 18px 0 13px;
+}
+
+.patient-upcoming .section-heading h2,
+.patient-activity .section-heading h2 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.patient-upcoming .section-heading p,
+.patient-activity .section-heading p {
+  margin: 3px 0 0;
+  font-size: 11.9px;
+}
+
+.patient-section-heading {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 12px;
+}
+
+.patient-section-icon {
+  display: grid;
+  width: 38px;
+  height: 38px;
+  flex: 0 0 38px;
+  place-items: center;
+  border: 1px solid #dceee3;
+  border-radius: 12px;
+  background: #edf8f2;
+  color: #438d75;
+}
+
+.patient-upcoming .appointment-list {
+  gap: 9px;
+  padding: 1px 0 8px;
+  border-top: 0;
+}
+
+.patient-upcoming .appointment-card {
+  align-items: center;
+  gap: 14px;
+  padding: 12px 14px;
+  border: 1px solid #e1ece5;
+  border-radius: 15px;
+  background: linear-gradient(110deg, #fbfefc, #f5faf7);
+}
+
+.patient-upcoming .appointment-card:hover {
+  border-color: #b6d8c4;
+  background: linear-gradient(110deg, #f5fbf7, #f2f6fc);
+}
+
+.visit-date {
+  display: grid;
+  width: 48px;
+  height: 50px;
+  flex: 0 0 48px;
+  place-content: center;
+  border: 1px solid #dceee3;
+  border-radius: 14px;
+  background: #e7f5ee;
+  color: #367d60;
+  text-align: center;
+}
+
+.visit-date strong {
+  font-size: 18px;
+  line-height: 1;
+}
+
+.visit-date small {
+  margin-top: 3px;
+  font-size: 9.7px;
+  text-transform: uppercase;
+}
+
+.visit-detail {
+  min-width: 0;
+  flex: 1;
+}
+
+.visit-detail > strong {
+  color: var(--ink);
+  font-size: 12.5px;
+}
+
+.visit-detail p {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.patient-upcoming .status-badge {
+  padding: 6px 11px;
+  border-radius: 999px;
+}
+
+.patient-lower-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  align-items: start;
+  gap: 16px;
+  margin: 17px 0;
+}
+
+.patient-lower-grid > .surface {
+  min-width: 0;
+}
+
+.patient-activity {
+  padding: 0 20px 14px;
+}
+
+.dashboard-chart {
+  padding: 19px 20px;
+}
+
+.dashboard-chart h2 {
+  margin: 0 0 14px;
+  font-size: 16px;
+}
+
+.dashboard-chart .report-chart {
+  height: 240px;
+}
+
+.history-empty {
+  display: flex;
+  min-height: 133px;
+  align-items: center;
+  gap: 13px;
+  padding: 17px;
+  border: 1px dashed #dce9e1;
+  border-radius: 15px;
+  background: linear-gradient(120deg, #f8fcf9, #fbfaff);
+}
+
+.history-empty-icon {
+  display: grid;
+  width: 42px;
+  height: 42px;
+  flex: 0 0 42px;
+  place-items: center;
+  border-radius: 13px;
+  background: #e7f5ee;
+  color: #438d75;
+}
+
+.history-empty strong {
+  color: #3a5264;
+  font-size: 12px;
+}
+
+.history-empty p {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.55;
+}
+
+.activity-list {
+  display: grid;
+  gap: 2px;
+  padding-bottom: 4px;
+}
+
+.activity-list article {
+  position: relative;
+  display: flex;
+  gap: 13px;
+  padding: 11px 8px;
+  border: 0;
+  border-radius: 11px;
+  background: transparent;
+}
+
+.activity-list article:not(:last-child)::before {
+  position: absolute;
+  top: 21px;
+  bottom: -13px;
+  left: 12px;
+  width: 2px;
+  border-radius: 2px;
+  background: #dceee3;
+  content: '';
+}
+
+.activity-dot {
+  position: relative;
+  z-index: 1;
+  width: 10px;
+  height: 10px;
+  flex: 0 0 10px;
+  margin: 3px 0 0;
+  border-radius: 50%;
+  background: #438d75;
+  box-shadow: 0 0 0 4px #e7f5ee;
+}
+
+.activity-treatment {
+  background: #438d75;
+  box-shadow: 0 0 0 4px #e7f5ee;
+}
+
+.activity-payment {
+  background: #438d75;
+  box-shadow: 0 0 0 4px #e7f5ee;
+}
+
+.activity-list strong {
+  color: #42576d;
+  font-size: 11.9px;
+  font-weight: 650;
+}
+
+.activity-list p {
+  margin: 3px 0 0;
+  color: #909bad;
+  font-size: 10.8px;
+}
+
+.patient-history {
+  padding: 0 21px 9px;
+}
+
+.patient-history .section-heading {
+  padding: 18px 0 14px;
+}
+
+.patient-history-list {
+  gap: 9px;
+  padding: 1px 0 8px;
+}
+
+.patient-history-card {
+  align-items: center;
+  gap: 13px;
+  padding: 12px 14px;
+  border: 1px solid #e1ece5;
+  border-radius: 15px;
+  background: linear-gradient(110deg, #fbfefc, #f5faf7);
+}
+
+.patient-history-card:hover {
+  border-color: #b6d8c4;
+  background: linear-gradient(110deg, #f5fbf7, #f2f6fc);
+}
+
+.patient-history-date {
+  display: grid;
+  width: 46px;
+  height: 48px;
+  flex: 0 0 46px;
+  place-content: center;
+  border: 1px solid #dceee3;
+  border-radius: 13px;
+  background: #e7f5ee;
+  color: #367d60;
+  text-align: center;
+}
+
+.patient-history-date strong {
+  font-size: 17px;
+  line-height: 1;
+}
+
+.patient-history-date small {
+  margin-top: 3px;
+  font-size: 9px;
+  text-transform: uppercase;
+}
+
+.patient-history-copy {
+  min-width: 0;
+  flex: 1;
+}
+
+.patient-history-copy strong {
+  color: var(--ink);
+  font-size: 12px;
+}
+
+.patient-history-copy p {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 10.5px;
+  line-height: 1.5;
+}
+
+:global(.app-shell[data-theme='dark'] .dashboard-page .patient-welcome) {
+  border-color: #293d37;
+  background: linear-gradient(112deg, #182a28 0%, #1c302b 70%, #28273b 100%);
+  box-shadow: 0 12px 30px rgb(0 0 0 / 14%);
+}
+
+:global(.app-shell[data-theme='dark'] .dashboard-page .patient-welcome::after) {
+  background: rgb(111 190 150 / 10%);
+}
+
+:global(.app-shell[data-theme='dark'] .dashboard-page .patient-welcome .eyebrow) {
+  color: #9bd1b4;
+}
+
+:global(.app-shell[data-theme='dark'] .dashboard-page .history-empty) {
+  border-color: #344a40;
+  background: linear-gradient(120deg, #1d302b, #25263a);
+}
+
+:global(.app-shell[data-theme='dark'] .dashboard-page .history-empty-icon),
+:global(.app-shell[data-theme='dark'] .dashboard-page .stat-icon),
+:global(.app-shell[data-theme='dark'] .dashboard-page .patient-section-icon) {
   background: #294b3b;
   color: #a4e2ba;
 }
 
-.patient-summary{grid-template-columns:repeat(4,minmax(0,1fr));margin:0 0 18px}.patient-summary .stat-card{min-height:126px}.balance-number{font-size:23.8px!important}.patient-upcoming{padding:0 21px 8px}.patient-upcoming .section-heading,.patient-activity .section-heading{padding:19px 0 13px}.patient-upcoming .section-heading h2,.patient-activity .section-heading h2{margin:0;font-size:16.2px}.patient-upcoming .section-heading p,.patient-activity .section-heading p{margin:3px 0 0;font-size:11.9px}.appointment-card{align-items:center}.visit-date{display:grid;width:42px;height:46px;flex:none;place-content:center;border-radius:12px;background:#edf8f2;color:#367d60;text-align:center}.visit-date strong{font-size:18.4px;line-height:1}.visit-date small{font-size:9.7px;text-transform:uppercase}.visit-detail{flex:1}.patient-lower-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:17px;margin:18px 0}.patient-lower-grid>.surface{min-width:0}.patient-activity{padding:0 20px 15px}.activity-list{display:grid}.activity-list article{display:flex;gap:11px;padding:12px 0;border-top:1px solid #edf0f4}.activity-dot{width:8px;height:8px;flex:none;margin-top:5px;border-radius:50%;background:#65ad8b;box-shadow:0 0 0 4px #e9f6ee}.activity-treatment{background:#8c7abc;box-shadow:0 0 0 4px #f0edfa}.activity-payment{background:#d3a24e;box-shadow:0 0 0 4px #fcf4e7}.activity-list strong{color:#42576d;font-size:11.9px;font-weight:650}.activity-list p{margin:3px 0 0;color:#909bad;font-size:10.8px}.dashboard-chart h2{margin:0 0 5px;font-size:16.2px}.dashboard-chart>.muted{font-size:11.9px}@media(max-width:900px){.patient-summary{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:650px){.patient-lower-grid{grid-template-columns:1fr}.patient-summary{gap:10px}.patient-summary .stat-card{min-height:112px;padding:15px}.balance-number{font-size:20.5px!important}.patient-upcoming{padding:0 14px 7px}.patient-upcoming .section-heading{gap:10px}.visit-detail p{font-size:10.8px}}
+:global(.app-shell[data-theme='dark'] .dashboard-page .history-empty strong),
+:global(.app-shell[data-theme='dark'] .dashboard-page .activity-list strong) {
+  color: #e1e9f1;
+}
+
+:global(.app-shell[data-theme='dark'] .dashboard-page .patient-history-card) {
+  border-color: #354a40;
+  background: linear-gradient(110deg, #1d2c26, #202f29);
+}
+
+:global(.app-shell[data-theme='dark'] .dashboard-page .patient-history-card:hover) {
+  border-color: #52775f;
+  background: linear-gradient(110deg, #22382d, #202f29);
+}
+
+:global(.app-shell[data-theme='dark'] .dashboard-page .patient-history-date) {
+  border-color: #3c5949;
+  background: #294b3b;
+  color: #a4e2ba;
+}
+
+:global(.app-shell[data-theme='dark'] .dashboard-page .patient-upcoming .appointment-card) {
+  border-color: #354a40;
+  background: linear-gradient(110deg, #1d2c26, #202f29);
+}
+
+:global(.app-shell[data-theme='dark'] .dashboard-page .patient-upcoming .appointment-card:hover) {
+  border-color: #52775f;
+  background: linear-gradient(110deg, #22382d, #202f29);
+}
+
+:global(.app-shell[data-theme='dark'] .dashboard-page .visit-date) {
+  border-color: #3c5949;
+  background: #294b3b;
+  color: #a4e2ba;
+}
+
+:global(.app-shell[data-theme='dark'] .dashboard-page .patient-activity .activity-list article) {
+  border: 0;
+  background: transparent;
+}
+
+:global(.app-shell[data-theme='dark'] .dashboard-page .activity-list article:not(:last-child)::before) {
+  background: #3c5949;
+}
+
+:global(.app-shell[data-theme='dark'] .dashboard-page .activity-dot),
+:global(.app-shell[data-theme='dark'] .dashboard-page .activity-treatment),
+:global(.app-shell[data-theme='dark'] .dashboard-page .activity-payment) {
+  background: #73bd92;
+  box-shadow: 0 0 0 4px #294b3b;
+}
+
+@media (max-width: 900px) {
+  .patient-summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
 
 @media (max-width: 650px) {
+  .patient-welcome {
+    align-items: flex-start;
+    flex-direction: column;
+    padding: 20px;
+  }
+
+  .patient-welcome > .button {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .dashboard-shortcuts {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .dashboard-shortcuts .dashboard-shortcut:last-child {
+    grid-column: 1 / -1;
+  }
+
   .dashboard-shortcuts .dashboard-shortcut > .stat-icon {
     position: static;
     inset: auto;
@@ -213,8 +678,8 @@ onBeforeUnmount(() => {
   }
 
   .dashboard-shortcuts .dashboard-shortcut {
-    gap: 10px;
-    padding: 12px;
+    gap: 9px;
+    padding: 11px;
   }
 
   .dashboard-page .patient-summary .stat-card {
@@ -255,8 +720,13 @@ onBeforeUnmount(() => {
     line-height: 1.4;
   }
 
+  .patient-upcoming {
+    padding: 0 14px 7px;
+  }
+
   .patient-upcoming .section-heading {
     align-items: flex-start;
+    gap: 10px;
   }
 
   .patient-upcoming .section-heading > div {
@@ -266,6 +736,37 @@ onBeforeUnmount(() => {
   .patient-upcoming .section-heading .text-link {
     flex: 0 0 auto;
     white-space: nowrap;
+  }
+
+  .patient-history {
+    padding: 0 14px 8px;
+  }
+
+  .patient-history .section-heading {
+    align-items: flex-start;
+    gap: 10px;
+  }
+
+  .patient-history .section-heading > div {
+    min-width: 0;
+  }
+
+  .patient-history .section-heading .text-link {
+    flex: 0 0 auto;
+    white-space: nowrap;
+  }
+
+  .patient-history-card {
+    gap: 10px;
+    padding: 10px;
+  }
+
+  .patient-history-copy p {
+    white-space: normal;
+  }
+
+  .patient-lower-grid {
+    grid-template-columns: 1fr;
   }
 }
 
@@ -288,6 +789,14 @@ onBeforeUnmount(() => {
 
   .dashboard-page .patient-summary .stat-card > strong {
     font-size: 18px;
+  }
+
+  .dashboard-shortcuts {
+    grid-template-columns: 1fr;
+  }
+
+  .dashboard-shortcuts .dashboard-shortcut:last-child {
+    grid-column: auto;
   }
 
   .patient-upcoming .section-heading {

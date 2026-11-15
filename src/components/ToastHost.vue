@@ -255,16 +255,83 @@ onBeforeUnmount(() => {
 
 @media (max-width: 600px) {
   .toast-region {
-    top: max(72px, calc(env(safe-area-inset-top) + 58px));
-    right: 12px;
-    left: 12px;
+    top: max(68px, calc(env(safe-area-inset-top) + 56px));
+    right: max(9px, env(safe-area-inset-right));
+    left: max(9px, env(safe-area-inset-left));
     width: auto;
-    max-height: calc(100vh - 84px);
+    max-height: min(42vh, calc(100vh - 80px));
+    max-height: min(42dvh, calc(100dvh - 80px));
+    gap: 8px;
+    -webkit-overflow-scrolling: touch;
   }
-  .app-toast { grid-template-columns: 36px minmax(0, 1fr) 28px; gap: 10px; padding: 12px 11px 14px 13px; border-radius: 15px; }
-  .app-toast-icon { width: 36px; height: 36px; border-radius: 11px; }
-  .app-toast-copy strong { font-size: 13.5px; }
-  .app-toast-copy > span:not(.app-toast-category) { font-size: 12px; }
+  .app-toast {
+    grid-template-columns: 32px minmax(0, 1fr) 24px;
+    gap: 8px;
+    padding: 9px 9px 11px 11px;
+    border-radius: 13px;
+  }
+  .app-toast::before { top: 10px; bottom: 10px; }
+  .app-toast-icon {
+    width: 32px;
+    height: 32px;
+    border-radius: 10px;
+    font-size: 15px;
+  }
+  .app-toast-copy { gap: 3px; padding-top: 0; }
+  .app-toast-category {
+    min-height: 17px;
+    padding: 2px 6px;
+    font-size: 8px;
+  }
+  .app-toast-copy strong {
+    font-size: 12.5px;
+    line-height: 1.3;
+  }
+  .app-toast-copy > span:not(.app-toast-category) {
+    font-size: 11px;
+    line-height: 1.35;
+  }
+  .app-toast-action {
+    min-height: 25px;
+    margin-top: 1px;
+    padding: 4px 8px;
+    font-size: 10.5px;
+  }
+  .app-toast-close {
+    width: 24px;
+    height: 24px;
+    border-radius: 8px;
+  }
+  .app-toast-close svg { width: 14px; height: 14px; }
+}
+@media (max-width: 380px) {
+  .toast-region {
+    right: max(7px, env(safe-area-inset-right));
+    left: max(7px, env(safe-area-inset-left));
+    max-height: min(40vh, calc(100vh - 76px));
+    max-height: min(40dvh, calc(100dvh - 76px));
+    gap: 7px;
+  }
+  .app-toast {
+    grid-template-columns: 29px minmax(0, 1fr) 22px;
+    gap: 7px;
+    padding: 8px 8px 10px 10px;
+  }
+  .app-toast-icon {
+    width: 29px;
+    height: 29px;
+    border-radius: 9px;
+    font-size: 14px;
+  }
+  .app-toast-copy strong { font-size: 12px; }
+  .app-toast-copy > span:not(.app-toast-category) { font-size: 10.5px; }
+  .app-toast-close { width: 22px; height: 22px; }
+}
+@media (min-width: 601px) and (max-width: 900px) {
+  .toast-region {
+    right: 16px;
+    width: min(360px, calc(100vw - 32px));
+  }
 }
 @media (prefers-reduced-motion: reduce) {
   .toast-enter-active,.toast-leave-active,.toast-move { transition: none; }
