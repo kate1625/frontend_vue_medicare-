@@ -1,5 +1,8 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { Calendar, type EventInput } from '@fullcalendar/core'
+import dayGridPlugin from '@fullcalendar/daygrid'
+import timeGridPlugin from '@fullcalendar/timegrid'
+import { computed, onActivated, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { ApiError, apiRequest, getApiData } from '../services/api'
 import SkeletonLoader from '../components/SkeletonLoader.vue'
 import { notify } from '../services/toast'
@@ -23,14 +26,19 @@ const loading = ref(true)
 const saving = ref(false)
 const error = ref('')
 const success = ref('')
+const calendarElement = ref<HTMLDivElement | null>(null)
+const calendarDentistId = ref('all')
+let calendar: Calendar | null = null
 const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
+const lunchStart = '12:00:00'
+const lunchEnd = '13:00:00'
 const form = reactive({
   dentist_id: '',
   schedule_type: 'weekly' as 'weekly' | 'date',
   day_of_week: '1',
   schedule_date: '',
-  start_time: '09:00',
-  end_time: '17:00',
+  start_time: '',
+  end_time: '',
   is_available: true,
 })
 const today = new Date(Date.now() - new Date().getTimezoneOffset() * 60_000).toISOString().slice(0, 10)
@@ -40,6 +48,7 @@ async function load() {
   error.value = ''
   try {
     rows.value = await getApiData<ScheduleRow[]>('/api/dentists')
+    calendar?.refetchEvents()
   } catch (cause) {
     error.value = cause instanceof ApiError ? cause.message : 'Could not load dentist schedules.'
   } finally {
@@ -51,8 +60,8 @@ function resetForm() {
   form.schedule_type = 'weekly'
   form.schedule_date = ''
   form.is_available = true
-  form.start_time = '09:00'
-  form.end_time = '17:00'
+  form.start_time = ''
+  form.end_time = ''
 }
 
 async function save() {
@@ -106,7 +115,34 @@ async function remove(id: number) {
 const dentists = computed(() => [...new Map(rows.value.map((row) => [row.dentist_id, row])).values()])
 const schedules = computed(() => rows.value.filter((row) => row.schedule_id))
 function isAvailable(row: ScheduleRow) {
+  if (!row.schedule_date) {
+    return row.is_available === null
+      || row.is_available === undefined
+      || row.is_available === true
+      || Number(row.is_available) === 1
+  }
   return row.is_available === true || Number(row.is_available) === 1
+}
+
+function scheduleTime(value: string) {
+  return value.length === 5 ? `${value}:00` : value
+}
+
+function scheduleSegments(start: string, end: string) {
+  const startTime = scheduleTime(start)
+  const endTime = scheduleTime(end)
+  const segments: Array<{ start: string; end: string }> = []
+
+  if (startTime < lunchStart) {
+    const segmentEnd = endTime < lunchStart ? endTime : lunchStart
+    if (startTime < segmentEnd) segments.push({ start: startTime, end: segmentEnd })
+  }
+  if (endTime > lunchEnd) {
+    const segmentStart = startTime > lunchEnd ? startTime : lunchEnd
+    if (segmentStart < endTime) segments.push({ start: segmentStart, end: endTime })
+  }
+
+  return segments
 }
 
 function formatScheduleDate(value: string) {
@@ -119,7 +155,154 @@ function formatScheduleDate(value: string) {
   })
 }
 
-onMounted(load)
+function dateKey(date: Date) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
+}
+
+function nextDateKey(value: string) {
+  const date = new Date(`${value}T00:00:00`)
+  if (Number.isNaN(date.getTime())) return value
+  date.setDate(date.getDate() + 1)
+  return dateKey(date)
+}
+
+function formatScheduleTime(value: string) {
+  const [hour, minute] = value.split(':').map(Number)
+  const date = new Date(2000, 0, 1, hour, minute)
+  return new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit' }).format(date)
+}
+
+function calendarScheduleEvents(start: Date, end: Date): EventInput[] {
+  const filteredSchedules = schedules.value.filter((row) =>
+    calendarDentistId.value === 'all' || String(row.dentist_id) === calendarDentistId.value,
+  )
+  const specificDates = new Set(
+    filteredSchedules
+      .filter((row) => row.schedule_date)
+      .map((row) => `${row.dentist_id}:${row.schedule_date}`),
+  )
+  const events: EventInput[] = []
+  const lunchDates = new Set<string>()
+  const date = new Date(start)
+  date.setHours(0, 0, 0, 0)
+
+  while (date < end) {
+    const key = dateKey(date)
+    for (const row of filteredSchedules) {
+      if (row.schedule_date || row.day_of_week === null || Number(row.day_of_week) !== date.getDay()) continue
+      if (specificDates.has(`${row.dentist_id}:${key}`)) continue
+      if (!isAvailable(row) || !row.start_time || !row.end_time) continue
+      const startTime = scheduleTime(row.start_time)
+      const endTime = scheduleTime(row.end_time)
+      if (startTime < lunchEnd && endTime > lunchStart) lunchDates.add(key)
+      scheduleSegments(startTime, endTime).forEach((segment, index) => {
+        events.push({
+          id: `weekly-${row.schedule_id}-${key}-${index}`,
+          title: `${row.username} · ${formatScheduleTime(segment.start)}–${formatScheduleTime(segment.end)}`,
+          start: `${key}T${segment.start}`,
+          end: `${key}T${segment.end}`,
+          backgroundColor: '#328866',
+          borderColor: '#328866',
+          classNames: ['availability-calendar-event', 'availability-weekly'],
+        })
+      })
+    }
+    date.setDate(date.getDate() + 1)
+  }
+
+  for (const row of filteredSchedules) {
+    if (!row.schedule_date || row.schedule_date < dateKey(start) || row.schedule_date >= dateKey(end)) continue
+    const available = isAvailable(row)
+    const hasHours = Boolean(row.start_time && row.end_time)
+    if (available && hasHours && row.start_time && row.end_time) {
+      const startTime = scheduleTime(row.start_time)
+      const endTime = scheduleTime(row.end_time)
+      if (startTime < lunchEnd && endTime > lunchStart) lunchDates.add(row.schedule_date)
+      scheduleSegments(startTime, endTime).forEach((segment, index) => {
+        events.push({
+          id: `date-${row.schedule_id}-${index}`,
+          title: `${row.username} · ${formatScheduleTime(segment.start)}–${formatScheduleTime(segment.end)}`,
+          start: `${row.schedule_date}T${segment.start}`,
+          end: `${row.schedule_date}T${segment.end}`,
+          backgroundColor: '#4779ba',
+          borderColor: '#4779ba',
+          classNames: ['availability-calendar-event', 'availability-specific'],
+        })
+      })
+    } else if (available) {
+      events.push({
+        id: `date-${row.schedule_id}`,
+        title: `${row.username} · Available`,
+        start: row.schedule_date,
+        allDay: true,
+        backgroundColor: '#4779ba',
+        borderColor: '#4779ba',
+        classNames: ['availability-calendar-event', 'availability-specific'],
+      })
+    } else {
+      events.push({
+        id: `closed-${row.schedule_id}`,
+        title: `${row.username} · Unavailable`,
+        start: row.schedule_date,
+        end: nextDateKey(row.schedule_date),
+        allDay: true,
+        backgroundColor: '#bd555c',
+        borderColor: '#bd555c',
+        classNames: ['availability-calendar-event', 'availability-closed'],
+      })
+    }
+  }
+
+  for (const lunchDate of lunchDates) {
+    events.push({
+      id: `lunch-break-${lunchDate}`,
+      title: 'Lunch break · unavailable',
+      start: `${lunchDate}T${lunchStart}`,
+      end: `${lunchDate}T${lunchEnd}`,
+      backgroundColor: '#e5e9ec',
+      borderColor: '#cbd2d8',
+      textColor: '#4d5b66',
+      classNames: ['availability-calendar-event', 'availability-lunch-break'],
+    })
+  }
+
+  return events
+}
+
+function initializeCalendar() {
+  if (!calendarElement.value || calendar) return
+  calendar = new Calendar(calendarElement.value, {
+    plugins: [dayGridPlugin, timeGridPlugin],
+    initialView: 'dayGridMonth',
+    height: 'auto',
+    headerToolbar: {
+      left: 'prev,next today',
+      center: 'title',
+      right: 'dayGridMonth,timeGridWeek,timeGridDay',
+    },
+    displayEventTime: false,
+    events: (fetchInfo, successCallback) => {
+      successCallback(calendarScheduleEvents(fetchInfo.start, fetchInfo.end))
+    },
+    eventTimeFormat: { hour: 'numeric', minute: '2-digit', meridiem: 'short' },
+    dayMaxEvents: 3,
+    noEventsText: 'No availability scheduled for this period',
+  })
+  calendar.render()
+}
+
+watch(calendarDentistId, () => calendar?.refetchEvents())
+
+onMounted(async () => {
+  await load()
+  initializeCalendar()
+})
+
+onActivated(() => calendar?.updateSize())
+onBeforeUnmount(() => {
+  calendar?.destroy()
+  calendar = null
+})
 </script>
 
 <template>
@@ -208,14 +391,48 @@ onMounted(load)
       </div>
 
       <div class="schedule-form-footer">
-        <p v-if="form.schedule_type === 'date'">A specific-date setting takes priority over that day’s weekly hours.</p>
-        <p v-else>Patients can book during these hours on the selected weekday.</p>
+        <p>
+          <span v-if="form.schedule_type === 'date'">A specific-date setting takes priority over that day’s weekly hours.</span>
+          <span v-else>Patients can book during these hours on the selected weekday.</span>
+          <span class="schedule-lunch-note">Lunch break, 12:00–1:00 PM, is always blocked.</span>
+        </p>
         <button class="button button-primary" :disabled="saving || !dentists.length">
           {{ saving ? 'Saving schedule…' : form.schedule_type === 'date' ? form.is_available ? 'Save date availability' : 'Save as unavailable' : 'Add weekly hours' }}
         </button>
       </div>
     </template>
   </form>
+
+  <section class="availability-calendar-section">
+    <header class="availability-calendar-heading">
+      <div>
+        <p class="schedule-kicker">SCHEDULE OVERVIEW</p>
+        <h2>Availability calendar</h2>
+        <p>See weekly hours and one-time date changes at a glance.</p>
+      </div>
+      <label class="calendar-dentist-filter">
+        <span>Show dentist</span>
+        <select v-model="calendarDentistId" aria-label="Filter availability calendar by dentist">
+          <option value="all">All dentists</option>
+          <option v-for="dentist in dentists" :key="dentist.dentist_id" :value="String(dentist.dentist_id)">
+            {{ dentist.username }}
+          </option>
+        </select>
+      </label>
+    </header>
+    <section class="surface availability-calendar-card" aria-label="Dentist availability calendar">
+      <div class="availability-calendar-legend" aria-label="Calendar legend">
+        <span><i class="legend-dot legend-weekly"></i>Weekly hours</span>
+        <span><i class="legend-dot legend-specific"></i>Date-specific hours</span>
+        <span><i class="legend-dot legend-closed"></i>Unavailable</span>
+        <span><i class="legend-dot legend-lunch"></i>Lunch break (12:00–1:00 PM)</span>
+      </div>
+      <p v-if="!loading && !schedules.length" class="availability-empty-note" role="status">
+        No availability times are scheduled yet. Add hours above to show them here.
+      </p>
+      <div ref="calendarElement" class="availability-calendar"></div>
+    </section>
+  </section>
 
   <section class="schedule-list-heading">
     <div><p class="schedule-kicker">CURRENT AVAILABILITY</p><h2>Saved schedules</h2></div>
@@ -256,6 +473,30 @@ onMounted(load)
 .schedule-kicker { margin: 0 0 6px; color: #438d75; font-size: 10.8px; font-weight: 750; letter-spacing: 1px; }
 .schedule-form-heading h2,.schedule-list-heading h2 { margin: 0; color: #26364a; font-size: 20.5px; font-weight: 720; letter-spacing: -.3px; }
 .schedule-form-heading > div > p:last-child { margin: 6px 0 0; color: #78879a; font-size: 13px; }
+.availability-calendar-section { margin: 0 0 30px; }
+.availability-calendar-heading { display: flex; align-items: flex-end; justify-content: space-between; gap: 18px; margin: 0 2px 13px; }
+.availability-calendar-heading h2 { margin: 0; color: #26364a; font-size: 20.5px; font-weight: 720; letter-spacing: -.3px; }
+.availability-calendar-heading > div > p:last-child { margin: 6px 0 0; color: #78879a; font-size: 12.5px; }
+.calendar-dentist-filter { display: grid; flex: 0 0 min(240px, 38%); gap: 6px; color: #526579; font-size: 11px; font-weight: 700; }
+.calendar-dentist-filter select { width: 100%; min-height: 40px; padding: 0 11px; border: 1px solid #dce4e8; border-radius: 9px; background: #fff; color: #314359; font: inherit; }
+.calendar-dentist-filter select:focus { border-color: #69a98c; outline: 0; box-shadow: 0 0 0 3px rgb(67 141 117 / 13%); }
+.availability-calendar-card { overflow: hidden; padding: clamp(14px, 2vw, 22px); border-radius: 15px; }
+.availability-calendar-legend { display: flex; flex-wrap: wrap; align-items: center; gap: 9px 18px; margin-bottom: 15px; color: #64776f; font-size: 10.8px; }
+.availability-calendar-legend > span { display: inline-flex; align-items: center; gap: 7px; }
+.availability-empty-note { margin: 0 0 14px; padding: 11px 13px; border: 1px dashed #cbd9d1; border-radius: 9px; background: #f7faf8; color: #61746b; font-size: 11.5px; line-height: 1.5; }
+.legend-dot { width: 9px; height: 9px; flex: 0 0 auto; border-radius: 50%; }
+.legend-weekly { background: #328866; }
+.legend-specific { background: #4779ba; }
+.legend-closed { background: #bd555c; }
+.legend-lunch { background: #aeb8bf; }
+:global(.app-shell[data-theme='dark'] .availability-calendar .fc .availability-lunch-break) { border-color: #66737b !important; background: #39454c !important; color: #e1e7eb !important; }
+:global(.app-shell[data-theme='dark'] .availability-calendar .fc .availability-lunch-break .fc-event-main) { color: #e1e7eb !important; }
+:global(.availability-calendar .fc .fc-toolbar) { gap: 12px; margin-bottom: 17px; }
+:global(.availability-calendar .fc .fc-toolbar-title) { font-size: clamp(16px, 2vw, 20px); }
+:global(.availability-calendar .fc .fc-button) { border-radius: 7px; box-shadow: none; font-size: 11.5px; font-weight: 650; }
+:global(.availability-calendar .fc .fc-event) { border-radius: 5px; padding: 2px 4px; font-size: 10px; font-weight: 650; }
+:global(.availability-calendar .fc .fc-daygrid-event-dot) { display: none; }
+:global(.availability-calendar .fc .fc-daygrid-day-frame) { min-height: 95px; }
 .schedule-count,.schedule-list-count { flex: 0 0 auto; padding: 6px 10px; border: 1px solid #e4ebe7; border-radius: 999px; background: #f7faf8; color: #667a70; font-size: 10.8px; font-weight: 650; }
 .schedule-type-group { margin-bottom: 19px; }
 .schedule-field-label,.schedule-field > span:first-child { display: block; color: #405168; font-size: 11.9px; font-weight: 700; }
@@ -277,6 +518,7 @@ onMounted(load)
 .schedule-availability strong { color: #405168; font-size: 11.9px; }
 .schedule-form-footer { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-top: 21px; padding-top: 17px; border-top: 1px solid #edf0f2; }
 .schedule-form-footer p { max-width: 510px; margin: 0; color: #78879a; font-size: 10.8px; line-height: 1.6; }
+.schedule-lunch-note { display: block; margin-top: 3px; font-weight: 650; }
 .schedule-form-footer .button { min-height: 42px; flex: 0 0 auto; padding-inline: 18px; border-radius: 9px; }
 .schedule-no-dentists { padding: 20px; border: 1px dashed #dce6e1; border-radius: 11px; background: #f8faf9; }
 .schedule-no-dentists strong { color: #35495b; font-size: 13px; }
@@ -293,10 +535,12 @@ onMounted(load)
 .schedule-table .actions-cell { min-width: 82px; text-align: right; }
 .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; clip-path: inset(50%); }
 :global(:root[data-theme='dark'] .schedule-form-heading h2),
+:global(:root[data-theme='dark'] .availability-calendar-heading h2),
 :global(:root[data-theme='dark'] .schedule-list-heading h2),
 :global(:root[data-theme='dark'] .schedule-no-dentists strong),
 :global(:root[data-theme='dark'] .schedule-availability strong) { color: #e4ede9; }
 :global(:root[data-theme='dark'] .schedule-form-heading > div > p:last-child),
+:global(:root[data-theme='dark'] .availability-calendar-heading > div > p:last-child),
 :global(:root[data-theme='dark'] .schedule-form-footer p),
 :global(:root[data-theme='dark'] .schedule-no-dentists p),
 :global(:root[data-theme='dark'] .schedule-empty p) { color: #b2c2bb; }
@@ -312,6 +556,10 @@ onMounted(load)
 :global(:root[data-theme='dark'] .schedule-field select option) { background: #1d2a25; color: #f0f5f2; }
 :global(:root[data-theme='dark'] .schedule-field small),
 :global(:root[data-theme='dark'] .schedule-availability small) { color: #b2c2bb; }
+:global(:root[data-theme='dark'] .calendar-dentist-filter) { color: #d3e0d9; }
+:global(:root[data-theme='dark'] .calendar-dentist-filter select) { border-color: #40534b; background: #1d2a25; color: #f0f5f2; color-scheme: dark; }
+:global(:root[data-theme='dark'] .availability-calendar-legend) { color: #b2c2bb; }
+:global(:root[data-theme='dark'] .availability-empty-note) { border-color: #40534b; background: #263630; color: #c1d0c9; }
 :global(:root[data-theme='dark'] .schedule-type-options button) { border-color: #40534b; background: #263630; color: #e0eae4; }
 :global(:root[data-theme='dark'] .schedule-type-options button.active) { border-color: #5a9677; background: #2b4037; }
 :global(:root[data-theme='dark'] .schedule-type-options button small) { color: #b2c2bb; }
@@ -322,6 +570,19 @@ onMounted(load)
 :global(:root[data-theme='dark'] .schedule-table .data-table td) { border-color: #354741; color: #e0eae4; }
 :global(:root[data-theme='dark'] .schedule-table .data-table td strong) { color: #f0f5f2; }
 :global(:root[data-theme='dark'] .schedule-table .data-table td small) { color: #b2c2bb; }
+:global(.app-shell[data-theme='dark'] .availability-calendar .fc) { color: #d2dfd8; }
+:global(.app-shell[data-theme='dark'] .availability-calendar .fc .fc-toolbar-title) { color: #e7f0eb; }
+:global(.app-shell[data-theme='dark'] .availability-calendar .fc .fc-col-header-cell) { background: #24352e; }
+:global(.app-shell[data-theme='dark'] .availability-calendar .fc .fc-col-header-cell-cushion) { color: #b7c9bf; }
+:global(.app-shell[data-theme='dark'] .availability-calendar .fc .fc-daygrid-day-number) { color: #d3e0d9; }
+:global(.app-shell[data-theme='dark'] .availability-calendar .fc .fc-day-other .fc-daygrid-day-number) { color: #71847a; }
+:global(.app-shell[data-theme='dark'] .availability-calendar .fc .fc-day-today) { background: #2b4037; }
+:global(.app-shell[data-theme='dark'] .availability-calendar .fc .fc-button-primary:disabled) { border-color: #3b5148; background: #263630; color: #a8b9b1; }
+:global(.app-shell[data-theme='dark'] .availability-calendar .fc .fc-button-primary:not(:disabled):hover),
+:global(.app-shell[data-theme='dark'] .availability-calendar .fc .fc-button-primary:not(:disabled).fc-button-active) { border-color: #609676; background: #35664c; color: #f0f5f2; }
+:global(.app-shell[data-theme='dark'] .availability-calendar .fc .fc-daygrid-more-link) { color: #a9dfbf; }
+:global(.app-shell[data-theme='dark'] .availability-calendar .fc .fc-popover) { border-color: #40534b; background: #1d2b26; }
+:global(.app-shell[data-theme='dark'] .availability-calendar .fc .fc-popover-header) { background: #263630; color: #e4ede9; }
 @media (max-width: 760px) {
   .schedule-fields { grid-template-columns: minmax(0, 1fr); gap: 15px; }
   .schedule-availability { grid-column: auto; }
@@ -329,10 +590,22 @@ onMounted(load)
   .schedule-form-footer .button { width: 100%; }
   .schedule-table { overflow-x: auto; }
   .schedule-table .data-table { min-width: 680px; }
+  .availability-calendar-heading { align-items: stretch; flex-direction: column; }
+  .calendar-dentist-filter { flex-basis: auto; width: 100%; }
+  :global(.availability-calendar .fc .fc-header-toolbar) { align-items: center; flex-direction: column; }
+  :global(.availability-calendar .fc .fc-toolbar-chunk) { display: flex; flex-wrap: wrap; justify-content: center; }
+  :global(.availability-calendar .fc .fc-daygrid-day-frame) { min-height: 74px; }
 }
 @media (max-width: 480px) {
   .schedule-form-heading { flex-direction: column; }
   .schedule-type-options { grid-template-columns: minmax(0, 1fr); }
   .schedule-count { align-self: flex-start; }
+  .availability-calendar-card { padding: 10px; }
+  .availability-calendar-legend { justify-content: center; gap: 8px 12px; }
+  :global(.availability-calendar .fc .fc-button) { padding: .3em .42em; font-size: 10px; }
+  :global(.availability-calendar .fc .fc-toolbar-title) { font-size: 15px; }
+  :global(.availability-calendar .fc .fc-daygrid-day-frame) { min-height: 60px; }
+  :global(.availability-calendar .fc .fc-daygrid-day-number) { padding: 3px; font-size: 10px; }
+  :global(.availability-calendar .fc .fc-daygrid-event) { margin: 1px 2px; padding: 1px 2px; font-size: 9px; }
 }
 </style>
