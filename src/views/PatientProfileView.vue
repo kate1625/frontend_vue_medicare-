@@ -58,9 +58,21 @@ function toothClasses(tooth: number) {
     { selected: selectedTooth.value === String(tooth), 'has-treatment': treatmentsForTooth(tooth).length > 0 },
   ]
 }
-function toothLabel(tooth: number) {
-  const count = treatmentsForTooth(tooth).length
-  return `Tooth ${tooth}, ${conditionForTooth(tooth)}${count ? `, ${count} treatment ${count === 1 ? 'record' : 'records'}` : ''}`
+function toothTooltip(tooth: number) {
+  const condition = conditionForTooth(tooth)
+  const treatments = treatmentsForTooth(tooth)
+  const details = [condition === 'Unrecorded' ? 'No condition recorded' : `Condition: ${condition}`]
+  if (treatments.length) {
+    const treatment = treatments[0].treatment_done || treatments[0].diagnosis
+    details.push(`${treatments.length} treatment ${treatments.length === 1 ? 'record' : 'records'}`)
+    if (treatment) details.push(`Includes: ${treatment}`)
+  } else {
+    details.push('No treatment record')
+  }
+  return `Tooth ${tooth} - ${details.join('; ')}`
+}
+function showToothDetails(tooth: number) {
+  selectedTooth.value = String(tooth)
 }
 async function load() {
   loading.value = true; error.value = ''
@@ -332,7 +344,7 @@ onMounted(load)
       <div class="feature-header">
         <div>
           <h2>Your dental chart</h2>
-          <p class="muted">Select a tooth to see its recorded condition and any treatment your dentist saved. This chart is read-only.</p>
+          <p class="muted">Hover over, focus, or select a tooth to see its condition and saved treatments. This chart is read-only.</p>
         </div>
       </div>
 
@@ -346,9 +358,12 @@ onMounted(load)
               :key="tooth"
               type="button"
               :class="toothClasses(tooth)"
-              :aria-label="toothLabel(tooth)"
+              :aria-label="toothTooltip(tooth)"
+              :title="toothTooltip(tooth)"
               :aria-pressed="selectedTooth === String(tooth)"
-              @click="selectedTooth = String(tooth)"
+              @mouseenter="showToothDetails(tooth)"
+              @focus="showToothDetails(tooth)"
+              @click="showToothDetails(tooth)"
             >
               {{ tooth }}<span v-if="treatmentsForTooth(tooth).length" class="tooth-treatment-marker" aria-hidden="true"></span>
             </button>
@@ -362,9 +377,12 @@ onMounted(load)
               :key="tooth"
               type="button"
               :class="toothClasses(tooth)"
-              :aria-label="toothLabel(tooth)"
+              :aria-label="toothTooltip(tooth)"
+              :title="toothTooltip(tooth)"
               :aria-pressed="selectedTooth === String(tooth)"
-              @click="selectedTooth = String(tooth)"
+              @mouseenter="showToothDetails(tooth)"
+              @focus="showToothDetails(tooth)"
+              @click="showToothDetails(tooth)"
             >
               {{ tooth }}<span v-if="treatmentsForTooth(tooth).length" class="tooth-treatment-marker" aria-hidden="true"></span>
             </button>
@@ -381,7 +399,11 @@ onMounted(load)
           <h3 :id="`tooth-history-${selectedTooth}`">Tooth {{ selectedTooth }}</h3>
           <span>{{ conditionForTooth(Number(selectedTooth)) }}</span>
         </div>
-        <p v-if="!selectedToothHistory.length" class="empty-inline">No treatment record has been saved for this tooth yet.</p>
+        <p v-if="!selectedToothHistory.length" class="empty-inline">
+          {{ conditionForTooth(Number(selectedTooth)) === 'Unrecorded'
+            ? 'No condition or treatment has been recorded for this tooth yet.'
+            : 'No treatment record has been saved for this tooth yet.' }}
+        </p>
         <div v-else class="selected-tooth-records">
           <article v-for="item in selectedToothHistory" :key="item.record_id" class="selected-tooth-record">
             <div class="history-top">
