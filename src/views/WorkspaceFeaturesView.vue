@@ -78,6 +78,7 @@ const contactSearch = ref('')
 const currentUser = getStaffUser()
 const currentUserId = currentUser?.id
 const selectedContactId = ref<number | null>(null)
+const readEnabledContactId = ref<number | null>(null)
 const selectedContact = computed(() => messageContacts.value.find((contact) => contact.user_id === selectedContactId.value))
 const replyTarget = ref<MessageRow | null>(null)
 const mobileContactsOpen = ref(false)
@@ -109,7 +110,8 @@ function conversationSenderLabel(contact: MessageContact) {
 let temporaryMessageId = -1
 let messageRefreshTimer: number | null = null
 let messagesPageActive = false
-watch(selectedContactId, () => {
+watch(selectedContactId, (contactId) => {
+  if (readEnabledContactId.value !== contactId) readEnabledContactId.value = null
   replyTarget.value = null
   shouldAutoScrollMessages.value = true
   void scrollMessageThread(true)
@@ -369,7 +371,7 @@ async function refreshMessages(loadContacts = false) {
     form.value.recipient_id = selectedContactId.value ?? ''
   }
   const peerId = selectedContactId.value
-  if (peerId) {
+  if (peerId && readEnabledContactId.value === peerId) {
     await apiRequest('/api/messages/read', {
       method: 'POST',
       body: JSON.stringify({ sender_id: peerId }),
@@ -388,6 +390,7 @@ async function refreshMessages(loadContacts = false) {
   }
 }
 async function selectContact(contactId:number){
+  readEnabledContactId.value=contactId
   selectedContactId.value=contactId
   mobileContactsOpen.value = false
   replyTarget.value = null
@@ -406,7 +409,7 @@ onMounted(async()=>{
   startMessageRefresh()
 })
 onActivated(() => { messagesPageActive = true; startMessageRefresh() })
-onDeactivated(() => { messagesPageActive = false; stopMessageRefresh() })
+onDeactivated(() => { messagesPageActive = false; readEnabledContactId.value = null; stopMessageRefresh() })
 onBeforeUnmount(() => {
   stopMessageRefresh()
   window.removeEventListener('medicare:profile-picture-change', handleProfilePictureChange)

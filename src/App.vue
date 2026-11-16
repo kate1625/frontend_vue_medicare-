@@ -297,8 +297,7 @@ function notificationCategory(type: string, title: string, message: string): Toa
 }
 
 function markMessagesRead() {
-  unreadMessageCount.value = 0
-  previousUnreadMessages = 0
+  void refreshUnreadCounts()
 }
 
 function refreshCountsWhenVisible() {
