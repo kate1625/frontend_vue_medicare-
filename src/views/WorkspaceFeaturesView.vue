@@ -94,7 +94,6 @@ const selectedMessages = computed(() => messages.value
   .filter((message) => message.sender_id === selectedContactId.value || message.recipient_id === selectedContactId.value)
   .slice()
   .reverse())
-const sendingMessage = ref(false)
 let temporaryMessageId = -1
 let messageRefreshTimer: number | null = null
 let messagesPageActive = false
@@ -221,7 +220,7 @@ async function startReply(message: MessageRow) {
 async function sendMessage() {
   const recipientId = selectedContactId.value
   const body = String(form.value.body ?? '').trim()
-  if (!recipientId || !body || sendingMessage.value) return
+  if (!recipientId || !body) return
 
   const temporaryId = temporaryMessageId--
   const quotedMessage = replyTarget.value
@@ -241,7 +240,8 @@ async function sendMessage() {
     delivery_status: 'sending',
   }
   messages.value = [optimisticMessage, ...messages.value]
-  sendingMessage.value = true
+  form.value.body = ''
+  if (replyTarget.value === quotedMessage) replyTarget.value = null
   error.value = ''
   success.value = ''
 
@@ -267,15 +267,13 @@ async function sendMessage() {
         delivery_status: 'sent',
       }, ...messages.value]
     }
-    if (selectedContactId.value === recipientId) {
-      form.value.body = ''
-      if (replyTarget.value === quotedMessage) replyTarget.value = null
-    }
   } catch (cause) {
     messages.value = messages.value.filter((message) => message.message_id !== temporaryId)
+    if (selectedContactId.value === recipientId && !String(form.value.body ?? '').trim()) {
+      form.value.body = body
+      if (!replyTarget.value) replyTarget.value = quotedMessage
+    }
     error.value = cause instanceof ApiError ? cause.message : 'Could not send this message.'
-  } finally {
-    sendingMessage.value = false
   }
 }
 async function refreshMessages(loadContacts = false) {
@@ -465,10 +463,9 @@ onBeforeUnmount(() => {
               <span class="reply-preview-content"><strong>Replying to {{replyTarget.sender}}</strong><span>{{replyTarget.body}}</span></span>
               <button class="cancel-reply" type="button" aria-label="Cancel reply" @click="replyTarget = null">×</button>
             </div>
-            <textarea ref="composerTextarea" v-model="form.body" rows="2" maxlength="5000" placeholder="Write a message…" required :disabled="!selectedContactId || sendingMessage"></textarea>
-            <button class="button button-primary" :disabled="busy||sendingMessage||!selectedContactId||!String(form.body||'').trim()">
-              <span v-if="sendingMessage" class="button-sending"><span class="loading-spinner"></span>Sending…</span>
-              <span v-else>Send</span>
+            <textarea ref="composerTextarea" v-model="form.body" rows="1" maxlength="5000" placeholder="Write a message…" required :disabled="!selectedContactId" @keydown.enter.exact.prevent="sendMessage"></textarea>
+            <button class="button button-primary" :disabled="busy||!selectedContactId||!String(form.body||'').trim()">
+              Send
             </button>
           </form>
         </div>
@@ -565,8 +562,11 @@ onBeforeUnmount(() => {
   border-color: #d5e9dd;
 }
 .message-composer textarea {
+  height: 48px;
   min-height: 48px;
-  max-height: 150px;
+  max-height: 48px;
+  resize: none;
+  overflow-y: auto;
 }
 .message-composer .button {
   min-height: 42px;
