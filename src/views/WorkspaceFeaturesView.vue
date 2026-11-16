@@ -54,6 +54,7 @@ interface MessageContact {
   is_online: boolean | number | string
   unread_count: number | string
   last_message: string | null
+  last_message_id?: number | null
   last_message_sender_id: number | string | null
   last_message_at: string | null
 }
@@ -83,10 +84,16 @@ const mobileContactsOpen = ref(false)
 const messageThreadElement = ref<HTMLDivElement | null>(null)
 const composerTextarea = ref<HTMLTextAreaElement | null>(null)
 const shouldAutoScrollMessages = ref(true)
+const orderedMessageContacts = computed(() => messageContacts.value.slice().sort((a, b) => {
+  const timeOrder = (b.last_message_at ?? '').localeCompare(a.last_message_at ?? '')
+  if (timeOrder) return timeOrder
+  const messageOrder = (b.last_message_id ?? 0) - (a.last_message_id ?? 0)
+  return messageOrder || a.username.localeCompare(b.username)
+}))
 const filteredMessageContacts = computed(() => {
   const query = contactSearch.value.trim().toLocaleLowerCase()
-  if (!query) return messageContacts.value
-  return messageContacts.value.filter((contact) =>
+  if (!query) return orderedMessageContacts.value
+  return orderedMessageContacts.value.filter((contact) =>
     contact.username.toLocaleLowerCase().includes(query),
   )
 })
@@ -94,6 +101,11 @@ const selectedMessages = computed(() => messages.value
   .filter((message) => message.sender_id === selectedContactId.value || message.recipient_id === selectedContactId.value)
   .slice()
   .reverse())
+function conversationSenderLabel(contact: MessageContact) {
+  if (Number(contact.last_message_sender_id) === currentUserId) return 'You sent'
+  if (patientMode) return contact.role_name === 'Admin' ? 'Clinic admin sent' : 'Clinic team sent'
+  return `${contact.role_name} sent`
+}
 let temporaryMessageId = -1
 let messageRefreshTimer: number | null = null
 let messagesPageActive = false
@@ -224,6 +236,7 @@ async function sendMessage() {
 
   const temporaryId = temporaryMessageId--
   const quotedMessage = replyTarget.value
+  const previousContact = messageContacts.value.find((contact) => contact.user_id === recipientId)
   shouldAutoScrollMessages.value = true
   const optimisticMessage: MessageRow = {
     message_id: temporaryId,
@@ -240,6 +253,17 @@ async function sendMessage() {
     delivery_status: 'sending',
   }
   messages.value = [optimisticMessage, ...messages.value]
+  messageContacts.value = messageContacts.value.map((contact) =>
+    contact.user_id === recipientId
+      ? {
+          ...contact,
+          last_message: body,
+          last_message_id: temporaryId,
+          last_message_sender_id: currentUserId ?? null,
+          last_message_at: optimisticMessage.created_at,
+        }
+      : contact,
+  )
   form.value.body = ''
   if (replyTarget.value === quotedMessage) replyTarget.value = null
   error.value = ''
@@ -267,8 +291,36 @@ async function sendMessage() {
         delivery_status: 'sent',
       }, ...messages.value]
     }
+    messageContacts.value = messageContacts.value.map((contact) =>
+      contact.user_id === recipientId && contact.last_message_id === temporaryId
+        ? { ...contact, last_message_id: response.data.message_id }
+        : contact,
+    )
   } catch (cause) {
     messages.value = messages.value.filter((message) => message.message_id !== temporaryId)
+    const latestKnownMessage = messages.value
+      .filter((message) => message.sender_id === recipientId || message.recipient_id === recipientId)
+      .reduce<MessageRow | null>((latest, message) => {
+        if (!latest || message.created_at > latest.created_at
+          || (message.created_at === latest.created_at && message.message_id > latest.message_id)) {
+          return message
+        }
+        return latest
+      }, null)
+    const previousPersistedContact = previousContact && Number(previousContact.last_message_id) > 0
+      ? previousContact
+      : null
+    messageContacts.value = messageContacts.value.map((contact) =>
+      contact.user_id === recipientId && contact.last_message_id === temporaryId
+        ? {
+            ...contact,
+            last_message: latestKnownMessage?.body ?? previousPersistedContact?.last_message ?? null,
+            last_message_id: latestKnownMessage?.message_id ?? previousPersistedContact?.last_message_id ?? null,
+            last_message_sender_id: latestKnownMessage?.sender_id ?? previousPersistedContact?.last_message_sender_id ?? null,
+            last_message_at: latestKnownMessage?.created_at ?? previousPersistedContact?.last_message_at ?? null,
+          }
+        : contact,
+    )
     if (selectedContactId.value === recipientId && !String(form.value.body ?? '').trim()) {
       form.value.body = body
       if (!replyTarget.value) replyTarget.value = quotedMessage
@@ -282,11 +334,15 @@ async function refreshMessages(loadContacts = false) {
   messages.value = [...pendingMessages, ...response.messages]
   const latestMessagesByContact = new Map<number, MessageRow>()
   const unreadCountsByContact = new Map<number, number>()
-  for (const message of response.messages) {
+  for (const message of [...pendingMessages, ...response.messages]) {
     const senderId = Number(message.sender_id)
     const recipientId = Number(message.recipient_id)
     const contactId = senderId === currentUserId ? recipientId : senderId
-    if (!latestMessagesByContact.has(contactId)) latestMessagesByContact.set(contactId, message)
+    const latestMessage = latestMessagesByContact.get(contactId)
+    if (!latestMessage || message.created_at > latestMessage.created_at
+      || (message.created_at === latestMessage.created_at && message.message_id > latestMessage.message_id)) {
+      latestMessagesByContact.set(contactId, message)
+    }
     if (recipientId === currentUserId && Number(message.is_read) === 0) {
       unreadCountsByContact.set(contactId, (unreadCountsByContact.get(contactId) ?? 0) + 1)
     }
@@ -300,13 +356,14 @@ async function refreshMessages(loadContacts = false) {
       ...contact,
       unread_count: unreadCountsByContact.get(contact.user_id) ?? 0,
       last_message: latestMessage?.body ?? null,
+      last_message_id: latestMessage?.message_id ?? null,
       last_message_sender_id: latestMessage ? Number(latestMessage.sender_id) : null,
       last_message_at: latestMessage?.created_at ?? null,
     }
   })
   refreshProfilePictures()
   if (loadContacts || !messageContacts.value.some((contact) => contact.user_id === selectedContactId.value)) {
-    selectedContactId.value = messageContacts.value[0]?.user_id ?? null
+    selectedContactId.value = orderedMessageContacts.value[0]?.user_id ?? null
   }
   if (loadContacts) {
     form.value.recipient_id = selectedContactId.value ?? ''
@@ -419,7 +476,10 @@ onBeforeUnmount(() => {
                 <span class="contact-identity"><strong>{{contact.username}}</strong><small>{{contact.role_name}} · <span :class="['presence-label', { online: Number(contact.is_online) === 1 }]">{{Number(contact.is_online)===1?'Online':'Offline'}}</span></small></span>
                 <span v-if="Number(contact.unread_count)>0" class="unread-count" :aria-label="`${contact.username} sent ${contact.unread_count} new message${Number(contact.unread_count) === 1 ? '' : 's'}`">{{Number(contact.unread_count)>99?'New 99+':`New ${contact.unread_count}`}}</span>
               </span>
-              <span v-if="contact.last_message" class="contact-preview">{{Number(contact.last_message_sender_id)===contact.user_id?`${contact.username}: `:'You: '}}{{contact.last_message}}</span>
+              <span v-if="contact.last_message" class="contact-preview">
+                <span class="conversation-sender-indicator" :class="{ incoming: Number(contact.last_message_sender_id) !== currentUserId, unread: Number(contact.unread_count) > 0 }">{{conversationSenderLabel(contact)}}</span>
+                <span class="contact-message-preview">{{contact.last_message}}</span>
+              </span>
               <time v-if="contact.last_message_at" class="contact-time">{{contact.last_message_at}}</time>
             </button>
             <p v-if="!messageContacts.length" class="conversation-empty">No clinic contacts are available.</p>
@@ -477,6 +537,7 @@ onBeforeUnmount(() => {
 <style scoped>
 .form-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;margin:18px 0}.form-grid label{display:grid;gap:6px;color:#718793;font-size:13px;font-weight:650}.form-grid input,.form-grid select,.form-grid textarea{width:100%;border:1px solid #dce8e8;border-radius:11px;padding:11px;background:#fff;color:#183b4c;font:inherit}.return-visit-fields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.wide{grid-column:1/-1}.feature-state{margin-bottom:18px}.feature-state h2{margin-top:0}.appointment-card{display:flex;justify-content:space-between;gap:16px;padding:14px 4px;border-top:1px solid #e4edf0}.appointment-card p{margin:4px 0;color:#718793}.appointment-card small{color:#718793}@media(max-width:700px){.form-grid{grid-template-columns:1fr}.wide{grid-column:auto}}
 .messenger{display:grid;grid-template-columns:240px minmax(0,1fr);min-height:520px;overflow:hidden;padding:0}.messenger-contacts{padding:18px;border-right:1px solid var(--line)}.messenger-contacts h2,.messenger-thread h2{margin:0 0 12px;font-size:16.2px}.messenger-contacts button{display:grid;width:100%;gap:3px;margin:5px 0;padding:11px;border:0;border-radius:10px;background:transparent;text-align:left;color:var(--ink)}.messenger-contacts button.selected,.messenger-contacts button:hover{background:#e8f4ee}.messenger-contacts small,.message-bubble small{color:var(--muted);font-size:10.8px}.messenger-thread{display:flex;min-width:0;flex-direction:column;padding:18px}.messenger-thread header{border-bottom:1px solid var(--line)}.messenger-thread header p{margin:0 0 12px}.message-thread{display:flex;flex:1;flex-direction:column;gap:10px;overflow:auto;padding:16px 3px}.message-bubble{align-self:flex-start;max-width:min(78%,520px);padding:10px 13px;border-radius:14px 14px 14px 4px;background:#eef2f5}.message-bubble.outgoing{align-self:flex-end;border-radius:14px 14px 4px 14px;background:#e4f6ed}.message-bubble p{margin:4px 0 0;color:var(--ink);font-size:14px;white-space:pre-wrap;overflow-wrap:anywhere}.message-composer{display:flex;align-items:end;gap:10px;padding-top:12px;border-top:1px solid var(--line)}.message-composer textarea{flex:1;min-width:0;border:1px solid var(--line);border-radius:11px;padding:10px;background:var(--surface);color:var(--ink);font:inherit;resize:vertical}.contact-preview{overflow:hidden;color:var(--muted);font-size:10.8px;text-overflow:ellipsis;white-space:nowrap}.contact-time{color:var(--muted);font-size:9.7px}.messenger-contacts button.has-unread:not(.selected){border:1px solid #f1c5cb;background:#fff7f8}.messenger-contacts button.has-unread:not(.selected) strong{font-weight:800}.messenger-contacts button.has-unread:not(.selected) small{color:#bd3c51;font-weight:700}@media(max-width:700px){.messenger{grid-template-columns:1fr}.messenger-contacts{display:flex;flex-wrap:wrap;gap:5px;border-right:0;border-bottom:1px solid var(--line)}.messenger-contacts h2{width:100%}.messenger-contacts button{width:auto}.messenger-thread{min-height:420px;padding:13px}}
+.contact-preview{display:flex;align-items:center;gap:6px;min-width:0}.conversation-sender-indicator{flex:none;padding:2px 6px;border:1px solid #d5e9dd;border-radius:999px;background:#eef7f2;color:#39745f;font-size:9px;font-weight:750;line-height:1.4;white-space:nowrap}.conversation-sender-indicator.incoming{border-color:#dbe8f3;background:#f0f5fa;color:#4b6e89}.conversation-sender-indicator.unread{border-color:#f1c5cb;background:#fff0f2;color:#bd3c51}.contact-message-preview{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .delivery-status{display:block;margin-top:5px;text-align:right;color:#5d8a78!important;font-size:10.8px!important}
 .contact-summary{display:flex;align-items:center;justify-content:space-between;gap:8px}.unread-count{display:inline-grid;min-width:20px;height:20px;place-items:center;padding:0 6px;border-radius:999px;background:#d34f61;color:#fff;font-size:10.8px;font-weight:750}.messenger-contacts button:not(.selected):has(.unread-count) strong{font-weight:800}.messenger-contacts button:not(.selected):has(.unread-count) small{color:#bd3c51;font-weight:700}
 .contact-avatar,.message-avatar{display:inline-grid;flex:none;place-items:center;overflow:hidden;border-radius:50%;background:#dcefe5;color:#2f704e;font-weight:750}.contact-avatar{width:38px;height:38px;font-size:12px}.message-avatar{width:22px;height:22px;font-size:9px}.contact-avatar img,.message-avatar img{width:100%;height:100%;object-fit:cover}.contact-identity{display:grid;min-width:0;flex:1;gap:3px}.contact-identity strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.contact-identity small{display:flex;align-items:center;gap:4px}.presence-label{display:inline-flex;align-items:center;gap:5px;color:#718793;font-size:10.8px}.presence-label.online{color:#23824c}.presence-dot{width:8px;height:8px;border-radius:50%;background:#8995a4}.presence-label.online .presence-dot{background:#35a765;box-shadow:0 0 0 2px #dff4e7}.conversation-heading{display:flex;align-items:center;gap:10px;padding-bottom:12px}.conversation-heading h2{margin:0 0 3px}.conversation-heading p{margin:0}.message-meta{display:flex;align-items:center;gap:6px}.sending-indicator,.button-sending{display:inline-flex;align-items:center;gap:6px}.loading-spinner{width:12px;height:12px;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;animation:message-spin .7s linear infinite}@keyframes message-spin{to{transform:rotate(360deg)}}
@@ -498,6 +559,9 @@ onBeforeUnmount(() => {
 :global(.app-shell[data-theme='dark'] .messenger-contacts button.selected .contact-time) { color: #c1d0c9; }
 :global(.app-shell[data-theme='dark'] .messenger-contacts button.has-unread:not(.selected)) { border-color: #754849; background: #33272a; }
 :global(.app-shell[data-theme='dark'] .messenger-contacts button.has-unread:not(.selected) small) { color: #f0a3a8; }
+:global(.app-shell[data-theme='dark'] .conversation-sender-indicator) { border-color: #426d55; background: #244231; color: #a4e2ba; }
+:global(.app-shell[data-theme='dark'] .conversation-sender-indicator.incoming) { border-color: #4a6b83; background: #263947; color: #b6dcf6; }
+:global(.app-shell[data-theme='dark'] .conversation-sender-indicator.unread) { border-color: #754849; background: #40272a; color: #f0a3a8; }
 :global(.app-shell[data-theme='dark'] .messenger-thread header),
 :global(.app-shell[data-theme='dark'] .messenger .message-composer) { border-color: #354741; }
 :global(.app-shell[data-theme='dark'] .messenger .message-bubble) { background: #263630; color: #e4ede9; }
